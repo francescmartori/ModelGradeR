@@ -179,83 +179,162 @@ server <- function(input, output) {
   output$chart <- renderPlot({
     result <- getAnswers()
     req(result)
-    req(nrow(resultats) > 0)
     
-    metric_cols <- setdiff(names(resultats), c("user", "time"))
-    if (length(metric_cols) == 0) return(NULL)
-    
-    main_metric <- config$metric
-    
-    resultats_long <- resultats %>%
-      dplyr::mutate(dplyr::across(all_of(metric_cols), as.numeric)) %>%
-      dplyr::select(-time) %>%
-      tidyr::pivot_longer(-user, names_to = "metric", values_to = "value")
-    
-    result_long <- result %>%
-      dplyr::select(-time) %>%
-      tidyr::pivot_longer(-user, names_to = "metric", values_to = "value") %>%
-      dplyr::mutate(type = "Your attempt")
+    # Si no hi ha històric, no podem fer benchmark seriós
+    if (!exists("resultats") || nrow(resultats) == 0) return(NULL)
     
     if (config$task_type == "regression") {
-      best_row <- resultats %>%
-        dplyr::mutate(dplyr::across(all_of(metric_cols), as.numeric)) %>%
-        dplyr::slice_min(.data[[main_metric]], n = 1, with_ties = FALSE)
-    } else {
-      best_row <- resultats %>%
-        dplyr::mutate(dplyr::across(all_of(metric_cols), as.numeric)) %>%
-        dplyr::slice_max(.data[[main_metric]], n = 1, with_ties = FALSE)
-    }
-    
-    best_score <- best_row %>%
-      dplyr::select(-time) %>%
-      tidyr::pivot_longer(-user, names_to = "metric", values_to = "value") %>%
-      dplyr::mutate(type = "Best")
-    
-    punts_extra <- dplyr::bind_rows(result_long, best_score)
-    
-    p <- resultats_long %>%
-      ggplot2::ggplot(ggplot2::aes(x = metric, y = value)) +
-      ggplot2::geom_boxplot(outlier.shape = NA) +
-      ggplot2::labs(
-        title = "Benchmark of your results",
-        subtitle = sprintf("Your result (red) vs. best (blue) – main metric: %s", main_metric),
-        color = "Legend",
-        shape = "Legend"
-      ) +
-      ggplot2::ylim(0, max(c(resultats_long$value, punts_extra$value), na.rm = TRUE) * 1.2)
-    
-    if (nrow(punts_extra) > 0) {
-      p <- p +
-        ggplot2::geom_point(
+      # ======= CAS REGRESSIÓ: EL TEU CÒDIG ORIGINAL =======
+      req(all(c("RMSE", "MAE") %in% names(resultats)))
+      
+      rmse_min <- min(resultats$RMSE, na.rm = TRUE)
+      rmse_median <- median(resultats$RMSE, na.rm = TRUE)
+      rmse_threshold <- rmse_median + 3 * (rmse_median - rmse_min)
+      
+      mae_min <- min(resultats$MAE, na.rm = TRUE)
+      mae_median <- median(resultats$MAE, na.rm = TRUE)
+      mae_threshold <- mae_median + 3 * (mae_median - mae_min)
+      
+      resultats_filtrats <- resultats %>%
+        mutate(RMSE = as.numeric(RMSE),
+               MAE  = as.numeric(MAE)) %>%
+        filter(RMSE <= rmse_threshold, MAE <= mae_threshold)
+      
+      result_filtrat <- result %>%
+        mutate(RMSE = as.numeric(RMSE),
+               MAE  = as.numeric(MAE)) %>%
+        filter(RMSE <= rmse_threshold, MAE <= mae_threshold)
+      
+      dflog_long <- result_filtrat %>%
+        select(-time) %>%
+        pivot_longer(-user, names_to = "metric") %>%
+        mutate(type = "Your attempt")
+      
+      best_row <- resultats_filtrats %>%
+        mutate(total_error = RMSE + MAE) %>%
+        slice_min(total_error, n = 1, with_ties = FALSE)
+      
+      best_score <- best_row %>%
+        select(-time, -total_error) %>%
+        pivot_longer(-user, names_to = "metric") %>%
+        mutate(type = "Best (lowest avg)")
+      
+      punts_extra <- bind_rows(dflog_long, best_score)
+      
+      p <- resultats_filtrats %>%
+        select(-time) %>%
+        pivot_longer(-user, names_to = "metric") %>%
+        ggplot(aes(x = metric, y = value)) +
+        geom_boxplot(outlier.shape = NA) +
+        labs(title = "Benchmark of your results",
+             subtitle = "Your result (red) vs. best result (blue)",
+             color = "Legend",
+             shape = "Legend") +
+        ylim(0, max(c(resultats_filtrats$RMSE,
+                      resultats_filtrats$MAE), na.rm = TRUE) * 1.2)
+      
+      if (nrow(punts_extra) > 0) {
+        p <- p + geom_point(
           data = punts_extra,
-          ggplot2::aes(x = metric, y = value, color = type, shape = type),
+          aes(x = metric, y = value, color = type, shape = type),
           stroke = 2, size = 3
         )
+      }
+      
+      p +
+        scale_color_manual(values = c("Your attempt" = "red",
+                                      "Best (lowest avg)" = "blue")) +
+        scale_shape_manual(values = c("Your attempt" = 4,
+                                      "Best (lowest avg)" = 4)) +
+        theme(
+          text = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          axis.title = element_text(size = 16),
+          legend.text = element_text(size = 14),
+          legend.title = element_text(size = 15),
+          plot.title = element_text(size = 18, face = "bold"),
+          plot.subtitle = element_text(size = 15)
+        )
+      
+    } else if (config$task_type == "classification") {
+      # ======= CAS CLASSIFICACIÓ: BOXPLOTS 0–1 + CREUS =======
+      
+      # columnes de mètriques (ex: Accuracy, Precision, Sensitivity, Specificity, F1-Score)
+      metric_cols <- setdiff(names(resultats), c("user", "time"))
+      metric_cols <- intersect(metric_cols, setdiff(names(result), c("user", "time")))
+      if (length(metric_cols) == 0) return(NULL)
+      
+      # triem la mètrica "principal" per definir el "best"
+      main_metric <- config$metric
+      if (!(main_metric %in% metric_cols)) {
+        main_metric <- metric_cols[1]
+      }
+      
+      # històric en llarg
+      resultats_long <- resultats %>%
+        mutate(across(all_of(metric_cols), as.numeric)) %>%
+        select(-time) %>%
+        pivot_longer(-user, names_to = "metric", values_to = "value")
+      
+      # punt de l'estudiant
+      result_long <- result %>%
+        select(-time) %>%
+        pivot_longer(-user, names_to = "metric", values_to = "value") %>%
+        filter(metric %in% metric_cols) %>%
+        mutate(type = "Your attempt")
+      
+      # millor fila segons la mètrica principal (maximitzem, perquè són mètriques 0–1)
+      best_row <- resultats %>%
+        mutate(across(all_of(metric_cols), as.numeric)) %>%
+        slice_max(.data[[main_metric]], n = 1, with_ties = FALSE)
+      
+      best_score <- best_row %>%
+        select(-time) %>%
+        pivot_longer(-user, names_to = "metric", values_to = "value") %>%
+        filter(metric %in% metric_cols) %>%
+        mutate(type = "Best")
+      
+      punts_extra <- bind_rows(result_long, best_score)
+      
+      p <- resultats_long %>%
+        filter(metric %in% metric_cols) %>%
+        ggplot(aes(x = metric, y = value)) +
+        geom_boxplot(outlier.shape = NA) +
+        labs(
+          title = "Benchmark of your results",
+          subtitle = sprintf("Your result (red) vs. best result (blue) – main metric: %s",
+                             main_metric),
+          color = "Legend",
+          shape = "Legend"
+        ) +
+        ylim(0, 1)  # totes les mètriques estan entre 0 i 1
+      
+      if (nrow(punts_extra) > 0) {
+        p <- p +
+          geom_point(
+            data = punts_extra,
+            aes(x = metric, y = value, color = type, shape = type),
+            stroke = 2, size = 3
+          )
+      }
+      
+      p +
+        scale_color_manual(values = c("Your attempt" = "red",
+                                      "Best" = "blue")) +
+        scale_shape_manual(values = c("Your attempt" = 4,
+                                      "Best" = 4)) +
+        theme(
+          text = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          axis.title = element_text(size = 16),
+          legend.text = element_text(size = 14),
+          legend.title = element_text(size = 15),
+          plot.title = element_text(size = 18, face = "bold"),
+          plot.subtitle = element_text(size = 15)
+        )
     }
-    
-    p +
-      ggplot2::scale_color_manual(values = c("Your attempt" = "red", "Best" = "blue")) +
-      ggplot2::scale_shape_manual(values = c("Your attempt" = 4, "Best" = 4)) +
-      ggplot2::theme(
-        text = ggplot2::element_text(size = 16),
-        axis.text = ggplot2::element_text(size = 14),
-        axis.title = ggplot2::element_text(size = 16),
-        legend.text = ggplot2::element_text(size = 14),
-        legend.title = ggplot2::element_text(size = 15),
-        plot.title = ggplot2::element_text(size = 18, face = "bold"),
-        plot.subtitle = ggplot2::element_text(size = 15)
-      )
   })
   
-  observeEvent(input$updateChart, {
-    if (input$admin_pw == admin_password) {
-      consolidar_resultats(path = config$results_path,
-                           output_file = config$resultats_rdata)
-      showNotification("✅ Results updated!", type = "message")
-    } else {
-      showNotification("❌ Incorrect password. Update not allowed.", type = "error")
-    }
-  })
   
   output$Answer <- renderUI({
     result <- getAnswers()
