@@ -1,0 +1,10 @@
+workshop_name: "Workshop 6 - Regresion Lineal Multiple"
+response_file: "W9_test_solutions.xlsx"
+response_column: "Survived_sol" #nom de la columna dels respostes correctes
+id_column: "PassengerId"
+user_column: "Email"
+prediction_column: "Survived" #nom de la columna dels alumnes
+results_path: "./AdD/"
+resultats_rdata: "W6.RData"
+metric: "RMSE"
+task_type: "classification"
