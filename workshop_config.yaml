@@ -1,10 +1,10 @@
-workshop_name: "Workshop 6 - Regresion Lineal Multiple"
-response_file: "W9_test_solutions.xlsx"
-response_column: "Survived_sol" #nom de la columna dels respostes correctes
-id_column: "PassengerId"
+workshop_name: "Workshop 11 - Classificacion"
+response_file: "W11_test_solutions.xlsx"
+response_column: "Churn_sol" #nom de la columna dels respostes correctes
+id_column: "id"
 user_column: "Email"
-prediction_column: "Survived" #nom de la columna dels alumnes
+prediction_column: "Churn" #nom de la columna dels alumnes
 results_path: "./AdD/"
-resultats_rdata: "W6.RData"
+resultats_rdata: "W11.RData"
 metric: "RMSE"
 task_type: "classification"
