@@ -1,10 +1,16 @@
 workshop_name: "Workshop 11 - Classificacion"
 response_file: "W11_test_solutions.xlsx"
-response_column: "Churn_sol" #nom de la columna dels respostes correctes
+response_column: "Churn_sol"   # column with the correct answers
 id_column: "id"
 user_column: "Email"
-prediction_column: "Churn" #nom de la columna dels alumnes
+prediction_column: "Churn"     # column with the students' predictions
 results_path: "./AdD/"
 resultats_rdata: "W11.RData"
-metric: "RMSE"
-task_type: "classification"
+task_type: "classification"    # regression | classification
+cooldown_seconds: 20           # minimum time between attempts (same browser)
+poll_ms: 2500                  # benchmark refresh frequency (ms)
+consolidate_after_idle_minutes: 10   # auto-consolidate after this many
+                                     # minutes without any new submission
+# Optional: metric  -> which metric defines the "Best" attempt in the
+# classification chart. Defaults to F1-Score; not used in regression.
+# Valid values: Accuracy | Precision | Sensitivity | Specificity | F1-Score

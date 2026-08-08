@@ -1,84 +1,75 @@
 library(shiny)
+library(shinyjs)
 
-# Define UI for data upload app ----
 ui <- fluidPage(
-  
-  # App title ----
+
+  useShinyjs(),
+
   titlePanel("Análisis de Datos - Corrector Workshop"),
-  
-  # Sidebar layout with input and output definitions ----
+
   sidebarLayout(
-    
-    # Sidebar panel for inputs ----
+
     sidebarPanel(
-      img(src = "iqslogo.png", height="35%", width="35%"),
-      
-      helpText("Upload the file with your results and press 'Get Result' to see how well you have done. Write your email in order to record your result." ),
-      
+      img(src = "iqslogo.png", height = "35%", width = "35%"),
+
+      helpText("Upload the file with your results and press 'Get result'
+                to see how well you have done. Write your email in order
+                to record your result."),
+
       br(),
-      # Input: User
       textInput("user", "Enter your IQS email"),
-      
-      # Input: File type
+
       radioButtons("filetype", "Select the type of file",
                    choices = c(Excel = "excel",
-                               CSV = "csv"),
+                               CSV   = "csv"),
                    selected = "excel"),
-      
-      # Input: Select a file ----
-      fileInput("file1", "Choose CSV File",
+
+      fileInput("file1", "Choose your results file",
                 multiple = FALSE,
                 accept = c("text/csv",
                            "text/comma-separated-values,text/plain",
                            ".csv", ".xlsx")),
-      
-      # Input: Select quotes ----
+
       actionButton("button", "Get result"),
       br(), br(),
-      actionButton("updateChart", "Update Chart"),
-      br(),   br(),  
-      
-      helpText("Advanced Options" ),
-      
-      # Input: Select separator ----
-      radioButtons("sep", "Separator",
-                   choices = c(Comma = ",",
-                               Semicolon = ";",
-                               Tab = "\t"),
-                   selected = ","),
-      
-      # Input: decimal separator
-      radioButtons("dec", "Decimal Character",
-                   choices = c(Comma = ",",
-                               Period = "."),
-                   selected = ","),
-      
-      # Input: Select number of rows to display ----
+
+      # CSV parsing options are only relevant (and only shown) when the
+      # student selects CSV; in practice almost everyone uploads Excel.
+      conditionalPanel(
+        condition = "input.filetype == 'csv'",
+        helpText("CSV Options"),
+        radioButtons("sep", "Separator",
+                     choices = c(Comma     = ",",
+                                 Semicolon = ";",
+                                 Tab       = "\t"),
+                     selected = ","),
+        radioButtons("dec", "Decimal Character",
+                     choices = c(Comma  = ",",
+                                 Period = "."),
+                     selected = ",")
+      ),
+
       radioButtons("disp", "Display",
                    choices = c(Head = "head",
-                               All = "all"),
+                               All  = "all"),
                    selected = "head"),
-      
+
       br(),
-      passwordInput("admin_pw", "Enter password to update", value = ""),
-      helpText("Martori, F. 2025. V1.0",br(),
-               "IQS School of Management,",br(), 
-               "Universitat Ramon Llull" ),
+      helpText("Martori, F. 2026. V2.0", br(),
+               "IQS School of Management,", br(),
+               "Universitat Ramon Llull"),
     ),
-    
-    # Main panel for displaying outputs ----
+
     mainPanel(
-      
-      # Output: Data file ----
-      br(), 
+      br(),
       br(),
       uiOutput("Answer"),
-      br(), 
+      br(),
       plotOutput("chart"),
-      br(), 
+      br(),
       br(),
       tableOutput("contents")
     )
-    
+
   )
 )
