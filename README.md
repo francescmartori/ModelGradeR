@@ -125,4 +125,4 @@ separate scripts; for robustness these should read the consolidated
 
 ## Author
 
-F. Martori — IQS School of Management, Universitat Ramon Llull.
+Francesc Martori — IQS School of Management, Universitat Ramon Llull.
