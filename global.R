@@ -1,9 +1,13 @@
 library(shiny)
 library(shinyjs)
-library(tidyverse)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(tibble)
+library(ggplot2)
 library(readxl)
 library(shinyalert)
-library(caret)
 library(yaml)
 
 # ---------------------------------------------------------------
@@ -195,7 +199,9 @@ compute_metrics <- function(obs, pred) {
   )
 }
 
-# Classification metrics using caret::confusionMatrix.
+# Classification metrics computed directly from the 2x2 confusion
+# table (positive class = 1). This replaces caret::confusionMatrix,
+# which pulled a large dependency tree for four cell counts.
 # NOTE: NA predictions are EXCLUDED here, not penalized (unlike regression).
 compute_classif_metrics <- function(check_answer, response_col, pred_col) {
 
@@ -218,6 +224,7 @@ compute_classif_metrics <- function(check_answer, response_col, pred_col) {
   if (any(is.na(resp_fac))) {
     stop("response_column must contain only 0/1 values for classification.")
   }
+  resp_num <- as.numeric(as.character(resp_fac))
 
   pred_raw <- df_cm$prediction
   if (is.factor(pred_raw)) pred_raw <- as.character(pred_raw)
@@ -237,18 +244,18 @@ compute_classif_metrics <- function(check_answer, response_col, pred_col) {
     pred_lab <- pred_num
   }
 
-  pred_fac <- factor(pred_lab, levels = c(0, 1))
+  # 2x2 confusion table, positive class = 1
+  tp <- sum(pred_lab == 1 & resp_num == 1)
+  tn <- sum(pred_lab == 0 & resp_num == 0)
+  fp <- sum(pred_lab == 1 & resp_num == 0)
+  fn <- sum(pred_lab == 0 & resp_num == 1)
 
-  cm <- confusionMatrix(
-    data      = pred_fac,
-    reference = resp_fac,
-    positive  = "1"
-  )
+  safe_div <- function(num, den) if (den > 0) num / den else NA_real_
 
-  accuracy    <- unname(cm$overall["Accuracy"])
-  sensitivity <- unname(cm$byClass["Sensitivity"])
-  specificity <- unname(cm$byClass["Specificity"])
-  precision   <- unname(cm$byClass["Pos Pred Value"])
+  accuracy    <- safe_div(tp + tn, tp + tn + fp + fn)
+  sensitivity <- safe_div(tp, tp + fn)   # recall / true positive rate
+  specificity <- safe_div(tn, tn + fp)   # true negative rate
+  precision   <- safe_div(tp, tp + fp)   # positive predictive value
 
   f1 <- if (!is.na(precision) && !is.na(sensitivity) &&
             (precision + sensitivity) > 0) {

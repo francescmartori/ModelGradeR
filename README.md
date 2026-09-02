@@ -1,5 +1,4 @@
-[README.md](https://github.com/user-attachments/files/30851584/README.md)
-# ModelGradeR
+# Workshop Corrector
 
 A Shiny app for automated scoring of student predictions in competitive,
 in-class prediction workshops. Students upload a file with their
@@ -115,10 +114,15 @@ separate scripts; for robustness these should read the consolidated
 
 - Three-file structure (`global.R` / `ui.R` / `server.R`) for standard
   Shiny Server deployment.
-- Dependencies: `shiny`, `shinyjs`, `tidyverse`, `readxl`,
-  `shinyalert`, `caret`, `yaml`.
+- Dependencies (deliberately minimal): `shiny`, `shinyjs`, `readr`,
+  `dplyr`, `tidyr`, `purrr`, `tibble`, `ggplot2`, `readxl`,
+  `shinyalert`, `yaml`. Classification metrics are computed directly
+  from the confusion table, with no modeling-package dependency.
 - Idle-time consolidation runs inside sessions: at least one browser
   must keep the app open past the idle window for it to trigger.
   Otherwise, consolidation simply happens at the next app startup —
   no data is lost either way.
 
+## Author
+
+F. Martori — IQS School of Management, Universitat Ramon Llull.
