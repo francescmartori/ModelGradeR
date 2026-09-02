@@ -35,7 +35,10 @@ cat("Library paths (R loads the FIRST copy found, in this order):\n")
 for (i in seq_along(.libPaths())) cat("  ", i, ". ", .libPaths()[i], "\n", sep = "")
 
 deps <- c("shiny", "shinyjs", "readr", "dplyr", "tidyr", "purrr",
-          "tibble", "ggplot2", "readxl", "shinyalert", "yaml")
+          "tibble", "ggplot2", "readxl", "shinyalert", "yaml",
+          "ragg")   # not a declared dep, but Shiny prefers it for
+                    # plot rendering when installed, pulling in
+                    # systemfonts/textshaping at runtime
 
 # All installed copies, in libPaths order; the EFFECTIVE copy of each
 # package (the one R actually loads) is the first occurrence.
@@ -118,15 +121,21 @@ for (p in deps) {
 }
 
 # ----------------------------------------------------------------
-# 3. Headless plot rendering test. Shiny renders plots through a PNG
-#    device, which pulls in systemfonts/textshaping/ragg lazily --
-#    exactly the libraries that broke in production. This reproduces
-#    that path without a browser.
+# 3. Headless plot rendering test, using the SAME device Shiny would
+#    choose: ragg::agg_png when ragg is installed (this is what pulls
+#    in systemfonts/textshaping at runtime), plain png() otherwise.
+#    A base-png-only test can pass while the app still fails.
 # ----------------------------------------------------------------
-cat("\n-- 3. Headless ggplot rendering (PNG device) --\n")
+cat("\n-- 3. Headless ggplot rendering (Shiny's preferred device) --\n")
 plot_test <- tryCatch({
   tmp <- tempfile(fileext = ".png")
-  png(tmp, width = 600, height = 400)
+  if (requireNamespace("ragg", quietly = TRUE)) {
+    dev_used <- "ragg::agg_png (Shiny's preferred device)"
+    ragg::agg_png(tmp, width = 600, height = 400)
+  } else {
+    dev_used <- "grDevices::png (ragg not installed)"
+    png(tmp, width = 600, height = 400)
+  }
   print(
     ggplot2::ggplot(data.frame(x = c("A", "B"), y = c(1, 2)),
                     ggplot2::aes(x, y)) +
@@ -136,7 +145,7 @@ plot_test <- tryCatch({
   dev.off()
   file.exists(tmp) && file.info(tmp)$size > 0
 }, error = function(e) conditionMessage(e))
-if (isTRUE(plot_test)) ok("ggplot rendered to PNG") else
+if (isTRUE(plot_test)) ok(paste0("ggplot rendered via ", dev_used)) else
   fail(paste0("Plot rendering failed: ", plot_test))
 
 # ----------------------------------------------------------------

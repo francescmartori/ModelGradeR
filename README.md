@@ -125,4 +125,8 @@ separate scripts; for robustness these should read the consolidated
 
 ## Author
 
+<<<<<<< HEAD
 F. Martori — IQS School of Management, Universitat Ramon Llull.
+=======
+Francesc Martori — IQS School of Management, Universitat Ramon Llull.
+>>>>>>> 762a8cb45c0ffcb8d19960a6a668e80d2052dc39
