@@ -26,6 +26,7 @@ if (is.null(config$poll_ms)) config$poll_ms <- 2500
 if (is.null(config$consolidate_after_idle_minutes)) {
   config$consolidate_after_idle_minutes <- 10
 }
+if (is.null(config$evidence_min_chars)) config$evidence_min_chars <- 30
 
 VALID_METRICS <- list(
   regression     = c("RMSE", "MAE"),
@@ -80,16 +81,39 @@ normalize_email <- function(x) tolower(trimws(x))
 
 # Unique filename + atomic write: write to .csv.tmp, then rename.
 # list.files(pattern = "\\.csv$") never sees half-written files.
-write_result_atomic <- function(result, dir_path, user) {
+# If model_text is non-empty, it is saved as a sibling file with the
+# same base name and a .model.txt extension, so the model evidence of
+# each attempt can be found by name (by a human or by the asynchronous
+# verification script). Never mixed into the CSV: Gretl output is
+# multi-line and would break the tabular results store.
+write_result_atomic <- function(result, dir_path, user, model_text = "") {
   safe_user <- gsub("[^A-Za-z0-9._@-]", "_", user)
   stamp  <- format(Sys.time(), "%Y%m%d-%H%M%OS3")   # millisecond precision
   suffix <- paste0(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")
-  final  <- file.path(dir_path,
-                      paste0(safe_user, "-", stamp, "-", suffix, ".csv"))
-  tmp <- paste0(final, ".tmp")
+  base   <- file.path(dir_path, paste0(safe_user, "-", stamp, "-", suffix))
+
+  if (nzchar(model_text)) {
+    model_final <- paste0(base, ".model.txt")
+    model_tmp   <- paste0(model_final, ".tmp")
+    writeLines(model_text, model_tmp)
+    file.rename(model_tmp, model_final)
+  }
+
+  # The CSV is written last: an attempt "exists" only once its CSV does,
+  # so a model file can never be orphaned in the other direction.
+  final <- paste0(base, ".csv")
+  tmp   <- paste0(final, ".tmp")
   write_csv(result, tmp)
   file.rename(tmp, final)
   invisible(final)
+}
+
+# Cheap plausibility check, deliberately NOT a validation of content:
+# only whether there is enough text to be a pasted model output.
+# Content verification (recomputing metrics from the declared model)
+# happens asynchronously, outside the app, on the attempts that count.
+has_model_evidence <- function(model_text) {
+  nchar(trimws(model_text)) >= config$evidence_min_chars
 }
 
 # ---------------------------------------------------------------
@@ -120,9 +144,17 @@ consolidar_resultats <- function(path        = config$results_path,
     resultats <- bind_rows(resultats, nous_resultats) %>% distinct()
     save(resultats, file = output_file)
 
-    # Move processed files only after the RData is safely written
+    # Move processed files only after the RData is safely written.
+    # Sibling .model.txt files (model evidence) travel with their CSV
+    # so the pairing by base name is preserved in processed/.
     file.rename(file_names,
                 file.path(processed, basename(file_names)))
+    model_files <- sub("\\.csv$", ".model.txt", file_names)
+    model_files <- model_files[file.exists(model_files)]
+    if (length(model_files) > 0) {
+      file.rename(model_files,
+                  file.path(processed, basename(model_files)))
+    }
   }
 
   invisible(resultats)

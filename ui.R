@@ -30,6 +30,17 @@ ui <- fluidPage(
                            "text/comma-separated-values,text/plain",
                            ".csv", ".xlsx")),
 
+      textAreaInput(
+        "model_text",
+        "Paste the Gretl output of the model you used",
+        rows        = 8,
+        placeholder = paste(
+          "Copy the model output from Gretl and paste it here.",
+          "Attempts without it are recorded and shown in the benchmark,",
+          "but do not count towards your grade."
+        )
+      ),
+
       actionButton("button", "Get result"),
       br(), br(),
 

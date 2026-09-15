@@ -37,6 +37,15 @@ Developed at IQS School of Management, Universitat Ramon Llull.
 - A server-side cooldown (default 20 s, mirrored client-side by
   disabling the button) prevents accidental duplicate submissions
   from double clicks.
+- Model evidence: a text box lets students paste the Gretl output of
+  the model behind each attempt. The app checks only that something
+  plausible was pasted and records a `has_evidence` flag; the text is
+  stored as a sibling `.model.txt` file next to the attempt's CSV.
+  Attempts without evidence are recorded and shown in the benchmark
+  but flagged as not counting towards the grade (the student is told
+  so on every such attempt). Content verification, i.e. recomputing
+  the metrics from the declared model, is deliberately asynchronous
+  and lives outside the app.
 - Uploaded files are validated with student-facing error messages:
   missing columns (listing the columns actually found), unreadable
   files, and the most common real-world mistake — uploading the TRAIN
@@ -67,6 +76,7 @@ task_type: "classification"                # regression | classification
 cooldown_seconds: 20
 poll_ms: 2500
 consolidate_after_idle_minutes: 10
+evidence_min_chars: 30        # min. pasted length for has_evidence = TRUE
 # metric: "F1-Score"   # optional; defines the "Best" attempt in the
 #                      # classification chart (default F1-Score).
 #                      # Not used in regression.
@@ -104,8 +114,10 @@ is inconsistent with the task type, or an input file is not found.
 ## Data recorded per attempt
 
 `user` (normalized email), `time` (full-precision timestamp, allowing
-arrival-order tie-breaking), `workshop`, and the metric columns for
-the task type. Grade computation is performed outside the app by
+arrival-order tie-breaking), `workshop`, `has_evidence` (whether model
+output was pasted), and the metric columns for the task type. The
+pasted model text of each attempt, when present, is in the sibling
+file `<same base name>.model.txt`. Grade computation is performed outside the app by
 separate scripts; for robustness these should read the consolidated
 `.RData` **plus** any pending CSVs (see `read_all_results()` in
 `global.R`, which can be reused as-is).
@@ -125,8 +137,4 @@ separate scripts; for robustness these should read the consolidated
 
 ## Author
 
-<<<<<<< HEAD
 F. Martori — IQS School of Management, Universitat Ramon Llull.
-=======
-Francesc Martori — IQS School of Management, Universitat Ramon Llull.
->>>>>>> 762a8cb45c0ffcb8d19960a6a668e80d2052dc39

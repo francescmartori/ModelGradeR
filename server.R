@@ -181,10 +181,16 @@ server <- function(input, output, session) {
         metric_row <- m$metrics
       }
 
+      # --- Model evidence (pasted Gretl output) ---
+      # Only presence is checked here; content is verified asynchronously.
+      model_text   <- if (is.null(input$model_text)) "" else input$model_text
+      has_evidence <- has_model_evidence(model_text)
+
       result <- data.frame(
-        user     = user_norm,
-        time     = Sys.time(),          # full precision (tie-breaking)
-        workshop = config$workshop_name,
+        user         = user_norm,
+        time         = Sys.time(),          # full precision (tie-breaking)
+        workshop     = config$workshop_name,
+        has_evidence = has_evidence,        # TRUE: model text was attached
         metric_row,
         check.names      = FALSE,
         stringsAsFactors = FALSE
@@ -194,7 +200,10 @@ server <- function(input, output, session) {
       attr(result, "n_total")   <- m$n_total
 
       # --- Persist: unique name, atomic write, exactly once ---
-      write_result_atomic(result, config$results_path, user_norm)
+      write_result_atomic(
+        result, config$results_path, user_norm,
+        model_text = if (has_evidence) model_text else ""
+      )
 
       last_accepted(now)
       attempt_result(result)
@@ -323,12 +332,20 @@ server <- function(input, output, session) {
                                names(resultats))
       if (length(metric_cols) == 0) return(NULL)
 
-      main_metric <- config$metric
+      # Guard against stores where the configured metric column is
+      # absent (e.g. legacy-schema rows only): fall back gracefully
+      # instead of crashing the chart.
+      main_metric <- if (config$metric %in% metric_cols) {
+        config$metric
+      } else {
+        metric_cols[1]
+      }
 
       resultats_long <- resultats %>%
         mutate(across(all_of(metric_cols), as.numeric)) %>%
         select(user, all_of(metric_cols)) %>%
-        pivot_longer(-user, names_to = "metric", values_to = "value")
+        pivot_longer(-user, names_to = "metric", values_to = "value") %>%
+        filter(!is.na(value))
 
       punts_extra <- tibble()
 
@@ -343,7 +360,8 @@ server <- function(input, output, session) {
 
       best_score <- resultats %>%
         mutate(across(all_of(metric_cols), as.numeric)) %>%
-        slice_max(.data[[main_metric]], n = 1, with_ties = FALSE) %>%
+        slice_max(.data[[main_metric]], n = 1, with_ties = FALSE,
+                  na_rm = TRUE) %>%
         select(user, all_of(metric_cols)) %>%
         pivot_longer(-user, names_to = "metric", values_to = "value") %>%
         mutate(type = "Best")
@@ -406,7 +424,8 @@ server <- function(input, output, session) {
     n_missing <- attr(result, "n_missing")
     n_total   <- attr(result, "n_total")
 
-    metric_cols <- setdiff(names(result), c("user", "time", "workshop"))
+    metric_cols <- setdiff(names(result),
+                           c("user", "time", "workshop", "has_evidence"))
     metric_lines <- map_chr(
       metric_cols,
       ~ sprintf("<strong>&#9989; %s:</strong> %s", .x, result[[.x]])
@@ -425,6 +444,20 @@ server <- function(input, output, session) {
         "<br><br>&#8505;&#65039; <strong>Note:</strong> You missed <strong>",
         n_missing, "</strong> out of ", n_total, " predictions (",
         percent_missing, "%).<br>", missing_note
+      )
+    }
+
+    # Unconditional, stateless notice: shown on every attempt without
+    # model evidence, regardless of how good the attempt is. No lookup
+    # against the benchmark, no session memory.
+    if (!isTRUE(result$has_evidence)) {
+      message <- paste0(
+        message,
+        "<br><br>&#9888;&#65039; <strong>No model attached.</strong> ",
+        "This attempt is recorded and you can see how it compares, ",
+        "but it will not count towards your grade. Paste the Gretl ",
+        "output of your model in the box on the left to make an ",
+        "attempt count."
       )
     }
 

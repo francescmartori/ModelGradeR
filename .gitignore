@@ -1,4 +1,6 @@
-.Rhistory
-.Rproj.user
-AdD
 participants.csv
+*_solutions.xlsx
+AdD/
+*.RData
+.Rproj.user/
+.Rhistory
