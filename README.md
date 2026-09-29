@@ -61,6 +61,64 @@ Developed at IQS School of Management, Universitat Ramon Llull.
 | `ui.R` | Interface (CSV parsing options only appear if CSV is selected) |
 | `workshop_config.yaml` | Per-workshop configuration |
 
+## Workshop workflow
+
+The app is one step in a larger workflow. The scripts in `tools/`
+cover the rest:
+
+1. **Prepare the materials** — `tools/separa_pestanyes.R` splits a
+   master Excel file (one sheet each for train data, the test set
+   given to students, and the solutions) into separate files. The
+   solutions file becomes the app's `response_file`; the others are
+   distributed to students.
+2. **Form the groups** — `tools/grups_workshop.R` builds random
+   groups of three within each class group from the participants
+   file, marking the remainder as COMODI (wildcards). It writes an
+   Excel file with one sheet per class group plus an `ASSIGNACIO`
+   sheet holding every assignment, which is the sheet used later to
+   join attempts to groups.
+3. **Configure and deploy** — set `workshop_config.yaml` for the
+   workshop, copy the app files to the server, restart Shiny Server,
+   and run `tools/preflight.R` (see below).
+4. **Run the session** — students upload predictions, receive their
+   metrics and see the live class benchmark.
+5. **Grade** — the consolidated results are joined to the
+   `ASSIGNACIO` sheet by student identifier.
+
+Both `separa_pestanyes.R` and `grups_workshop.R` take their inputs as
+command-line arguments and also have a CONFIGURACIÓ section at the top
+holding default values, so they can be run from RStudio without
+arguments. Their messages and comments are currently in Catalan.
+
+### Pre-deployment checks
+
+`tools/preflight.R` verifies, on the server, everything that can break
+a deployment: stale binary packages across all library paths (the
+`SETLENGTH` / `SET_GROWABLE_BIT` class of error after an R upgrade),
+that every dependency loads, that plots render headlessly through the
+device Shiny would actually use, that the configuration and input
+files are valid, and that the user running Shiny Server can write to
+the results directories. It exits with a non-zero status if any check
+fails.
+
+It uses paths relative to the app directory, so run it from there,
+as the Shiny Server user:
+
+```bash
+cd /srv/shiny-server/ModelGradeR
+sudo -u shiny Rscript tools/preflight.R
+```
+
+Run it after any system or R upgrade and before the first workshop of
+a term.
+
+### Deployment note
+
+Shiny Server keeps R processes alive between sessions, so copying new
+files is not enough: restart the service (`sudo systemctl restart
+shiny-server`) or touch `restart.txt` in the app directory. Copy
+`global.R`, `server.R` and `ui.R` together; they are one unit.
+
 ## Configuration (`workshop_config.yaml`)
 
 ```yaml
