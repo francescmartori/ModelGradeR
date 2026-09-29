@@ -174,39 +174,65 @@ try_consolidate_with_lock <- function() {
   invisible(TRUE)
 }
 
-# Read-only view used by every student session (via reactivePoll):
-# consolidated RData + any pending CSVs not yet consolidated.
+# Fast reader for the one-row attempt CSVs: readr's per-call overhead
+# dominates when hundreds of files are polled by dozens of sessions.
+read_attempt_csv <- function(path) {
+  tryCatch(
+    utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
+    error = function(e) NULL
+  )
+}
+
+# The RData holds `time` as POSIXct and a freshly read CSV as
+# character; bind_rows refuses to combine them. Text on both sides also
+# lets distinct() dedupe across the two sources.
+normalize_results <- function(d) {
+  if (is.null(d) || nrow(d) == 0) return(d)
+  if ("time" %in% names(d)) d$time <- as.character(d$time)
+  d
+}
+
+read_consolidated <- function(output_file = config$resultats_rdata) {
+  if (file.exists(output_file)) {
+    load(output_file)
+    normalize_results(resultats)
+  } else {
+    data.frame()
+  }
+}
+
+# Read-only view: consolidated RData + pending CSVs. For grading
+# scripts; the app builds the benchmark incrementally (see server.R).
 read_all_results <- function(path        = config$results_path,
                              output_file = config$resultats_rdata) {
 
-  if (file.exists(output_file)) {
-    load(output_file)
-  } else {
-    resultats <- data.frame()
-  }
+  resultats <- read_consolidated(output_file)
 
   pending <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
   if (length(pending) > 0) {
-    nous <- map_dfr(
-      pending,
-      ~ tryCatch(read_csv(.x, show_col_types = FALSE),
-                 error = function(e) NULL)
-    )
-    resultats <- bind_rows(resultats, nous)
+    nous <- lapply(pending, read_attempt_csv)
+    nous <- nous[!vapply(nous, is.null, logical(1))]
+    if (length(nous) > 0) {
+      resultats <- bind_rows(resultats,
+                             normalize_results(bind_rows(nous)))
+    }
   }
 
-  resultats %>% distinct()
+  distinct(resultats)
 }
 
-# Cheap fingerprint of the results state, for reactivePoll's checkFunc:
-# changes iff a new CSV appears or the RData is rewritten.
+# Cheap fingerprint for reactivePoll's checkFunc: one readdir, no file
+# contents read. Changes iff a CSV appears or the RData is rewritten.
 results_state <- function(path        = config$results_path,
                           output_file = config$resultats_rdata) {
   files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
-  rdata_info <- if (file.exists(output_file)) {
+  paste(c(rdata_stamp(output_file), files), collapse = "|")
+}
+
+rdata_stamp <- function(output_file = config$resultats_rdata) {
+  if (file.exists(output_file)) {
     paste0(output_file, file.info(output_file)$mtime)
   } else ""
-  paste(c(rdata_info, files), collapse = "|")
 }
 
 # ---------------------------------------------------------------
@@ -312,10 +338,11 @@ compute_classif_metrics <- function(check_answer, response_col, pred_col) {
 }
 
 # ---------------------------------------------------------------
-# Startup: consolidate BEFORE any session exists, then load inputs
+# Startup: load inputs.
+# No consolidation here: Shiny Server runs this file once per
+# connection, so it would run concurrently during a live session.
+# Consolidation happens only via try_consolidate_with_lock().
 # ---------------------------------------------------------------
-
-consolidar_resultats()
 
 participants <- read_delim("participants.csv", delim = ";",
                            show_col_types = FALSE)

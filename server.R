@@ -1,6 +1,7 @@
 # global.R provides: config, participants_emails, respostes,
 # compute_metrics(), compute_classif_metrics(), write_result_atomic(),
-# read_all_results(), results_state(), normalize_email()
+# read_consolidated(), read_attempt_csv(), normalize_results(),
+# results_state(), rdata_stamp(), normalize_email()
 
 server <- function(input, output, session) {
 
@@ -9,12 +10,51 @@ server <- function(input, output, session) {
   # checkFunc is a cheap directory fingerprint; valueFunc re-reads
   # only when a new CSV appears (or the RData changes).
   # -------------------------------------------------------------
-  results_data <- reactivePoll(
+  # The poll is only a change signal, not the data itself.
+  results_signal <- reactivePoll(
     intervalMillis = config$poll_ms,
     session        = session,
     checkFunc      = results_state,
-    valueFunc      = read_all_results
+    valueFunc      = results_state
   )
+
+  # Incremental benchmark: each pending CSV is read at most once per
+  # session and the RData only when its mtime changes, so the cost of a
+  # refresh follows the new attempts, not the total accumulated.
+  # Plain (non-reactive) variables: updating them inside the reactive
+  # must not re-invalidate it.
+  bench_base  <- NULL
+  bench_stamp <- ""
+  bench_seen  <- character(0)
+  bench_extra <- list()
+
+  results_data <- reactive({
+    results_signal()        # re-runs whenever the results store changes
+
+    stamp <- rdata_stamp()
+    if (!identical(stamp, bench_stamp)) {
+      bench_base  <<- read_consolidated()
+      bench_stamp <<- stamp
+    }
+
+    pending   <- list.files(config$results_path, pattern = "\\.csv$",
+                            full.names = TRUE)
+    new_files <- setdiff(pending, bench_seen)
+    if (length(new_files) > 0) {
+      rows <- lapply(new_files, read_attempt_csv)
+      rows <- rows[!vapply(rows, is.null, logical(1))]
+      if (length(rows) > 0) {
+        bench_extra <<- c(bench_extra, list(normalize_results(bind_rows(rows))))
+      }
+      bench_seen <<- c(bench_seen, new_files)
+    }
+
+    # Consolidated rows may also still be in bench_extra; distinct()
+    # dedupes them because both sides are normalized.
+    out <- bind_rows(bench_base, bind_rows(bench_extra))
+    if (is.null(out) || nrow(out) == 0) return(out)
+    distinct(out)
+  })
 
   # -------------------------------------------------------------
   # Idle-time consolidation: once per minute, check whether the
@@ -207,6 +247,7 @@ server <- function(input, output, session) {
 
       last_accepted(now)
       attempt_result(result)
+      updateTextAreaInput(session, "model_text", value = "")
 
       # --- Client-side cooldown: disable the button visibly ---
       shinyjs::disable("button")
