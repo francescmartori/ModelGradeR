@@ -131,17 +131,16 @@ consolidar_resultats <- function(path        = config$results_path,
 
   if (file.exists(output_file)) {
     load(output_file)                 # loads 'resultats'
+    resultats <- normalize_results(resultats)
   } else {
     resultats <- data.frame()
   }
 
   if (length(file_names) > 0) {
-    nous_resultats <- map_dfr(
-      file_names,
-      ~ tryCatch(read_csv(.x, show_col_types = FALSE),
-                 error = function(e) NULL)
-    )
-    resultats <- bind_rows(resultats, nous_resultats) %>% distinct()
+    nous <- lapply(file_names, read_attempt_csv)
+    nous <- nous[!vapply(nous, is.null, logical(1))]
+    nous_resultats <- normalize_results(bind_rows(nous))
+    resultats <- distinct(bind_rows(resultats, nous_resultats))
     save(resultats, file = output_file)
 
     # Move processed files only after the RData is safely written.
