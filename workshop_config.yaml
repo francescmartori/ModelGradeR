@@ -1,14 +1,13 @@
-workshop_name: "Workshop 1 - RLS"
-response_file: "W1_ans.xlsx"
-response_column: "QSScore"   # column with the correct answers
+workshop_name: "Workshop 02 - Regression"
+response_file: "Housing_Test_Solucions.xlsx"
+response_column: "medv"   # column with the correct answers
 id_column: "id"
 user_column: "Email"
-prediction_column: "Respostes"     # column with the students' predictions
+prediction_column: "Respuestas"     # column with the students' predictions
 results_path: "./AdD/"
-resultats_rdata: "W1.RData"
+resultats_rdata: "W02.RData"
 task_type: "regression"    # regression | classification
 cooldown_seconds: 20           # minimum time between attempts (same browser)
-poll_ms: 2500                  # benchmark refresh frequency (ms)
 consolidate_after_idle_minutes: 10   # auto-consolidate after this many
                                      # minutes without any new submission
 evidence_min_chars: 30         # minimum length of pasted model output for an

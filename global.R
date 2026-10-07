@@ -22,7 +22,6 @@ if (is.null(config$metric)) {
   config$metric <- if (config$task_type == "regression") "RMSE" else "F1-Score"
 }
 if (is.null(config$cooldown_seconds)) config$cooldown_seconds <- 20
-if (is.null(config$poll_ms)) config$poll_ms <- 2500
 if (is.null(config$consolidate_after_idle_minutes)) {
   config$consolidate_after_idle_minutes <- 10
 }

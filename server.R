@@ -7,30 +7,24 @@ server <- function(input, output, session) {
 
   # -------------------------------------------------------------
   # Live benchmark: read-only view of everyone's results.
-  # checkFunc is a cheap directory fingerprint; valueFunc re-reads
-  # only when a new CSV appears (or the RData changes).
-  # -------------------------------------------------------------
-  # The poll is only a change signal, not the data itself.
-  results_signal <- reactivePoll(
-    intervalMillis = config$poll_ms,
-    session        = session,
-    checkFunc      = results_state,
-    valueFunc      = results_state
-  )
-
-  # Incremental benchmark: each pending CSV is read at most once per
-  # session and the RData only when its mtime changes, so the cost of a
-  # refresh follows the new attempts, not the total accumulated.
-  # Plain (non-reactive) variables: updating them inside the reactive
-  # must not re-invalidate it.
+  # The benchmark is read ON DEMAND, not polled.
+  #
+  # With a reactivePoll, a single submission invalidated every open
+  # session and all of them redrew the chart: with 25 sessions that is 25
+  # ggplot renders per attempt, which saturated the CPU and left the
+  # students' own submissions queueing behind the redraws. Now the chart
+  # depends only on this session's own attempt, so one submission costs
+  # exactly one render, done by the session that submitted.
+  #
+  # Each pending CSV is still read at most once per session and the RData
+  # only when its mtime changes, so reading the store stays cheap.
+  # Plain (non-reactive) variables on purpose.
   bench_base  <- NULL
   bench_stamp <- ""
   bench_seen  <- character(0)
   bench_extra <- list()
 
-  results_data <- reactive({
-    results_signal()        # re-runs whenever the results store changes
-
+  llegeix_benchmark <- function() {
     stamp <- rdata_stamp()
     if (!identical(stamp, bench_stamp)) {
       bench_base  <<- read_consolidated()
@@ -54,7 +48,7 @@ server <- function(input, output, session) {
     out <- bind_rows(bench_base, bind_rows(bench_extra))
     if (is.null(out) || nrow(out) == 0) return(out)
     distinct(out)
-  })
+  }
 
   # -------------------------------------------------------------
   # Idle-time consolidation: once per minute, check whether the
@@ -275,14 +269,19 @@ server <- function(input, output, session) {
   })
 
   # -------------------------------------------------------------
-  # Benchmark plot: always shows the live class distribution;
-  # overlays this session's last attempt (red) and the best (blue).
+  # Benchmark plot: the class distribution as of this session's last
+  # submission (or as of opening the app), with this student's attempt
+  # (red) and the best (blue) overlaid once there is one.
   # -------------------------------------------------------------
   output$chart <- renderPlot({
-    resultats <- results_data()
-    if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
+    # Only dependency: this session's own accepted attempt. So the chart is
+    # drawn once when the session opens (showing the class distribution the
+    # student is competing against) and then only when this student submits.
+    # Other people's submissions never trigger a redraw here.
+    result <- attempt_result()   # NULL until the first submission
 
-    result <- attempt_result()   # may be NULL before first submission
+    resultats <- llegeix_benchmark()
+    if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
 
     if (config$task_type == "regression") {
 
