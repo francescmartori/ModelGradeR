@@ -465,7 +465,8 @@ server <- function(input, output, session) {
     n_total   <- attr(result, "n_total")
 
     metric_cols <- setdiff(names(result),
-                           c("user", "time", "workshop", "has_evidence"))
+                           c("user", "time", "workshop", "has_evidence",
+                             "attempt_id"))
     metric_lines <- map_chr(
       metric_cols,
       ~ sprintf("<strong>&#9989; %s:</strong> %s", .x, result[[.x]])

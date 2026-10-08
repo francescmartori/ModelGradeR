@@ -81,15 +81,22 @@ normalize_email <- function(x) tolower(trimws(x))
 # Unique filename + atomic write: write to .csv.tmp, then rename.
 # list.files(pattern = "\\.csv$") never sees half-written files.
 # If model_text is non-empty, it is saved as a sibling file with the
-# same base name and a .model.txt extension, so the model evidence of
-# each attempt can be found by name (by a human or by the asynchronous
-# verification script). Never mixed into the CSV: Gretl output is
-# multi-line and would break the tabular results store.
+# same base name and a .model.txt extension. Consolidation then moves the
+# pasted text into the store itself (see consolidar_resultats), so the
+# files in processed/ are only a recoverable backup. Never mixed into the
+# CSV: Gretl output is multi-line and would break the tabular store.
+#
+# The base name is also written into the row as attempt_id, which is what
+# links an attempt to its model text. Pairing by user and timestamp would
+# work most of the time; an explicit id always does.
 write_result_atomic <- function(result, dir_path, user, model_text = "") {
   safe_user <- gsub("[^A-Za-z0-9._@-]", "_", user)
   stamp  <- format(Sys.time(), "%Y%m%d-%H%M%OS3")   # millisecond precision
   suffix <- paste0(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")
-  base   <- file.path(dir_path, paste0(safe_user, "-", stamp, "-", suffix))
+  id     <- paste0(safe_user, "-", stamp, "-", suffix)
+  base   <- file.path(dir_path, id)
+
+  result$attempt_id <- id
 
   if (nzchar(model_text)) {
     model_final <- paste0(base, ".model.txt")
@@ -128,11 +135,12 @@ consolidar_resultats <- function(path        = config$results_path,
 
   file_names <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
 
+  resultats <- data.frame()
+  models    <- data.frame()
   if (file.exists(output_file)) {
-    load(output_file)                 # loads 'resultats'
+    load(output_file)                 # loads 'resultats', maybe 'models'
     resultats <- normalize_results(resultats)
-  } else {
-    resultats <- data.frame()
+    if (!is.data.frame(models)) models <- data.frame()
   }
 
   if (length(file_names) > 0) {
@@ -140,15 +148,29 @@ consolidar_resultats <- function(path        = config$results_path,
     nous <- nous[!vapply(nous, is.null, logical(1))]
     nous_resultats <- normalize_results(bind_rows(nous))
     resultats <- distinct(bind_rows(resultats, nous_resultats))
-    save(resultats, file = output_file)
 
-    # Move processed files only after the RData is safely written.
-    # Sibling .model.txt files (model evidence) travel with their CSV
-    # so the pairing by base name is preserved in processed/.
-    file.rename(file_names,
-                file.path(processed, basename(file_names)))
+    # Pasted model output goes into the store, keyed by attempt_id, so that
+    # everything a workshop produced travels in one file. The raw text is
+    # kept verbatim rather than parsed: the parser can improve later, the
+    # text cannot be recovered.
     model_files <- sub("\\.csv$", ".model.txt", file_names)
     model_files <- model_files[file.exists(model_files)]
+    if (length(model_files) > 0) {
+      nous_models <- data.frame(
+        attempt_id = sub("\\.model\\.txt$", "", basename(model_files)),
+        model_text = vapply(model_files, function(f)
+          paste(readLines(f, warn = FALSE, encoding = "UTF-8"),
+                collapse = "\n"), character(1), USE.NAMES = FALSE),
+        stringsAsFactors = FALSE
+      )
+      models <- distinct(bind_rows(models, nous_models))
+    }
+
+    save(resultats, models, file = output_file)
+
+    # Move processed files only after the RData is safely written.
+    file.rename(file_names,
+                file.path(processed, basename(file_names)))
     if (length(model_files) > 0) {
       file.rename(model_files,
                   file.path(processed, basename(model_files)))
@@ -156,6 +178,15 @@ consolidar_resultats <- function(path        = config$results_path,
   }
 
   invisible(resultats)
+}
+
+# The model texts of a workshop, keyed by attempt_id. Empty data frame for
+# stores written before the models object existed.
+read_models <- function(output_file = config$resultats_rdata) {
+  models <- data.frame()
+  if (file.exists(output_file)) load(output_file)
+  if (!is.data.frame(models)) models <- data.frame()
+  models
 }
 
 # Idle-time consolidation, safe under concurrency.
