@@ -60,16 +60,16 @@ server <- function(input, output, session) {
   # filter only trims errors that are too HIGH, so the minimum is never
   # one of the rows it drops: the row found here is the one on the chart.
   # -------------------------------------------------------------
-  # The attempts that are allowed to BE the best. With
-  # config$best_requires_model, an attempt without the Gretl output
-  # attached is not a reference anyone has to beat: it stays in the
-  # boxplot, but it cannot be the target or wear the blue cross.
+  # The attempts that make up the competition. With
+  # config$competition_requires_model, an attempt without the Gretl output
+  # attached is exploratory: it is computed and recorded, and its author
+  # sees it, but it does not shape the benchmark and cannot be the target.
   #
   # A store written before has_evidence existed has no such column; there
   # the flag cannot be applied and every attempt stays eligible.
   intents_elegibles <- function(resultats) {
     if (is.null(resultats) || nrow(resultats) == 0) return(resultats)
-    if (!isTRUE(config$best_requires_model)) return(resultats)
+    if (!isTRUE(config$competition_requires_model)) return(resultats)
     if (!"has_evidence" %in% names(resultats)) return(resultats)
     filter(resultats, as.logical(has_evidence) %in% TRUE)
   }
@@ -178,7 +178,7 @@ server <- function(input, output, session) {
     # such: without this, an unattached attempt with the lowest numbers of
     # the class scores better than the best ELIGIBLE attempt and would
     # otherwise pass the comparison below.
-    elegible <- !isTRUE(config$best_requires_model) ||
+    elegible <- !isTRUE(config$competition_requires_model) ||
       isTRUE(result$has_evidence)
 
     meu <- puntuacio_intent(result)
@@ -441,6 +441,10 @@ server <- function(input, output, session) {
         mutate(RMSE = as.numeric(RMSE),
                MAE  = as.numeric(MAE))
 
+      # The box describes the competition, not the exploration.
+      resultats <- intents_elegibles(resultats)
+      if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
+
       rmse_min       <- min(resultats$RMSE, na.rm = TRUE)
       rmse_median    <- median(resultats$RMSE, na.rm = TRUE)
       rmse_threshold <- rmse_median + 3 * (rmse_median - rmse_min)
@@ -469,9 +473,9 @@ server <- function(input, output, session) {
 
       # Same eligibility rule as the written target, so the blue cross and
       # the number in the text always point at the same attempt.
-      elegibles <- intents_elegibles(resultats_filtrats)
-      if (!is.null(elegibles) && nrow(elegibles) > 0) {
-        best_score <- elegibles %>%
+      candidats <- intents_elegibles(resultats_filtrats)
+      if (!is.null(candidats) && nrow(candidats) > 0) {
+        best_score <- candidats %>%
           mutate(total_error = RMSE + MAE) %>%
           slice_min(total_error, n = 1, with_ties = FALSE) %>%
           select(user, RMSE, MAE) %>%
@@ -536,6 +540,10 @@ server <- function(input, output, session) {
         metric_cols[1]
       }
 
+      # Same population rule as the regression branch above.
+      resultats <- intents_elegibles(resultats)
+      if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
+
       resultats_long <- resultats %>%
         mutate(across(all_of(metric_cols), as.numeric)) %>%
         select(user, all_of(metric_cols)) %>%
@@ -555,9 +563,9 @@ server <- function(input, output, session) {
 
       # Same eligibility rule as the written target (see the regression
       # branch): the blue cross marks an attempt that could actually win.
-      elegibles <- intents_elegibles(resultats)
-      if (!is.null(elegibles) && nrow(elegibles) > 0) {
-        best_score <- elegibles %>%
+      candidats <- intents_elegibles(resultats)
+      if (!is.null(candidats) && nrow(candidats) > 0) {
+        best_score <- candidats %>%
           mutate(across(all_of(metric_cols), as.numeric)) %>%
           slice_max(.data[[main_metric]], n = 1, with_ties = FALSE,
                     na_rm = TRUE) %>%
@@ -573,8 +581,13 @@ server <- function(input, output, session) {
         labs(
           title    = "Benchmark of your results",
           subtitle = sprintf(
-            "Your result (red) vs. best result (blue) – main metric: %s",
-            main_metric
+            "Your result (red) vs. best result (blue). Main metric: %s. Class: %s",
+            main_metric,
+            if (nomes_models) {
+              sprintf("%d attempts with the model attached.", nrow(resultats))
+            } else {
+              sprintf("all %d attempts so far.", nrow(resultats))
+            }
           ),
           color = "Legend",
           shape = "Legend"

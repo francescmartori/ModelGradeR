@@ -26,10 +26,13 @@ if (is.null(config$consolidate_after_idle_minutes)) {
   config$consolidate_after_idle_minutes <- 10
 }
 if (is.null(config$evidence_min_chars)) config$evidence_min_chars <- 30
-# TRUE: only attempts with the model attached can be "the best". The
-# benchmark boxplot still shows every attempt; what this governs is the
-# reference the students are told to beat, and the blue cross that marks it.
-if (is.null(config$best_requires_model)) config$best_requires_model <- TRUE
+# TRUE: the competition is made of the attempts that have the Gretl model
+# attached. The others are still computed, recorded and shown to their own
+# author, but they do not shape the class benchmark, cannot be the target to
+# beat and cannot wear the blue cross.
+if (is.null(config$competition_requires_model)) {
+  config$competition_requires_model <- TRUE
+}
 
 VALID_METRICS <- list(
   regression     = c("RMSE", "MAE"),
