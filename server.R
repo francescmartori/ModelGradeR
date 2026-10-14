@@ -60,6 +60,20 @@ server <- function(input, output, session) {
   # filter only trims errors that are too HIGH, so the minimum is never
   # one of the rows it drops: the row found here is the one on the chart.
   # -------------------------------------------------------------
+  # The attempts that are allowed to BE the best. With
+  # config$best_requires_model, an attempt without the Gretl output
+  # attached is not a reference anyone has to beat: it stays in the
+  # boxplot, but it cannot be the target or wear the blue cross.
+  #
+  # A store written before has_evidence existed has no such column; there
+  # the flag cannot be applied and every attempt stays eligible.
+  intents_elegibles <- function(resultats) {
+    if (is.null(resultats) || nrow(resultats) == 0) return(resultats)
+    if (!isTRUE(config$best_requires_model)) return(resultats)
+    if (!"has_evidence" %in% names(resultats)) return(resultats)
+    filter(resultats, as.logical(has_evidence) %in% TRUE)
+  }
+
   # Returns a list, or NULL if there is nothing to compare against yet:
   #   metrics  one-row data frame with the metric columns of the best attempt
   #   score    its score, in the direction the task is scored
@@ -69,6 +83,7 @@ server <- function(input, output, session) {
   # the same specification and end up with exactly the same error, so being
   # "the best" is often shared.
   millor_intent <- function(resultats) {
+    resultats <- intents_elegibles(resultats)
     if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
     tol <- 1e-9   # the store round-trips through CSV: compare loosely
 
@@ -159,8 +174,15 @@ server <- function(input, output, session) {
     )
     vals <- paste(vals, collapse = " &nbsp;&middot;&nbsp; ")
 
+    # An attempt that cannot be the best must never be congratulated as
+    # such: without this, an unattached attempt with the lowest numbers of
+    # the class scores better than the best ELIGIBLE attempt and would
+    # otherwise pass the comparison below.
+    elegible <- !isTRUE(config$best_requires_model) ||
+      isTRUE(result$has_evidence)
+
     meu <- puntuacio_intent(result)
-    lidera <- !is.na(meu) && (
+    lidera <- elegible && !is.na(meu) && (
       if (config$task_type == "regression") meu <= best$score + 1e-9
       else                                  meu >= best$score - 1e-9
     )
@@ -445,13 +467,18 @@ server <- function(input, output, session) {
         punts_extra <- bind_rows(punts_extra, dflog_long)
       }
 
-      best_score <- resultats_filtrats %>%
-        mutate(total_error = RMSE + MAE) %>%
-        slice_min(total_error, n = 1, with_ties = FALSE) %>%
-        select(user, RMSE, MAE) %>%
-        pivot_longer(-user, names_to = "metric") %>%
-        mutate(type = "Best (lowest avg)")
-      punts_extra <- bind_rows(punts_extra, best_score)
+      # Same eligibility rule as the written target, so the blue cross and
+      # the number in the text always point at the same attempt.
+      elegibles <- intents_elegibles(resultats_filtrats)
+      if (!is.null(elegibles) && nrow(elegibles) > 0) {
+        best_score <- elegibles %>%
+          mutate(total_error = RMSE + MAE) %>%
+          slice_min(total_error, n = 1, with_ties = FALSE) %>%
+          select(user, RMSE, MAE) %>%
+          pivot_longer(-user, names_to = "metric") %>%
+          mutate(type = "Best (lowest avg)")
+        punts_extra <- bind_rows(punts_extra, best_score)
+      }
 
       p <- resultats_filtrats %>%
         select(user, RMSE, MAE) %>%
@@ -526,14 +553,19 @@ server <- function(input, output, session) {
         punts_extra <- bind_rows(punts_extra, result_long)
       }
 
-      best_score <- resultats %>%
-        mutate(across(all_of(metric_cols), as.numeric)) %>%
-        slice_max(.data[[main_metric]], n = 1, with_ties = FALSE,
-                  na_rm = TRUE) %>%
-        select(user, all_of(metric_cols)) %>%
-        pivot_longer(-user, names_to = "metric", values_to = "value") %>%
-        mutate(type = "Best")
-      punts_extra <- bind_rows(punts_extra, best_score)
+      # Same eligibility rule as the written target (see the regression
+      # branch): the blue cross marks an attempt that could actually win.
+      elegibles <- intents_elegibles(resultats)
+      if (!is.null(elegibles) && nrow(elegibles) > 0) {
+        best_score <- elegibles %>%
+          mutate(across(all_of(metric_cols), as.numeric)) %>%
+          slice_max(.data[[main_metric]], n = 1, with_ties = FALSE,
+                    na_rm = TRUE) %>%
+          select(user, all_of(metric_cols)) %>%
+          pivot_longer(-user, names_to = "metric", values_to = "value") %>%
+          mutate(type = "Best")
+        punts_extra <- bind_rows(punts_extra, best_score)
+      }
 
       p <- resultats_long %>%
         ggplot(aes(x = metric, y = value)) +
