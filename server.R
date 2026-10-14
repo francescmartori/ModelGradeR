@@ -51,6 +51,134 @@ server <- function(input, output, session) {
   }
 
   # -------------------------------------------------------------
+  # The best attempt in the store, under the same rule the chart uses for
+  # the blue cross: in regression the lowest RMSE + MAE, in classification
+  # the highest main metric. Returns a one-row data frame with the metric
+  # columns, or NULL if there is nothing to compare against yet.
+  #
+  # The chart picks the best among non-aberrant attempts, but the aberrant
+  # filter only trims errors that are too HIGH, so the minimum is never
+  # one of the rows it drops: the row found here is the one on the chart.
+  # -------------------------------------------------------------
+  # Returns a list, or NULL if there is nothing to compare against yet:
+  #   metrics  one-row data frame with the metric columns of the best attempt
+  #   score    its score, in the direction the task is scored
+  #   n_tied   how many DISTINCT users sit at that score
+  #
+  # n_tied matters: in simple-regression workshops many groups converge on
+  # the same specification and end up with exactly the same error, so being
+  # "the best" is often shared.
+  millor_intent <- function(resultats) {
+    if (is.null(resultats) || nrow(resultats) == 0) return(NULL)
+    tol <- 1e-9   # the store round-trips through CSV: compare loosely
+
+    if (config$task_type == "regression") {
+      if (!all(c("RMSE", "MAE") %in% names(resultats))) return(NULL)
+      r <- resultats %>%
+        mutate(RMSE = as.numeric(RMSE),
+               MAE  = as.numeric(MAE)) %>%
+        filter(!is.na(RMSE), !is.na(MAE)) %>%
+        mutate(total_error = RMSE + MAE)
+      if (nrow(r) == 0) return(NULL)
+
+      best_val <- min(r$total_error)
+      list(
+        metrics = r %>%
+          slice_min(total_error, n = 1, with_ties = FALSE) %>%
+          select(RMSE, MAE),
+        score  = best_val,
+        n_tied = n_distinct(r$user[r$total_error <= best_val + tol])
+      )
+
+    } else {
+      metric_cols <- intersect(VALID_METRICS$classification,
+                               names(resultats))
+      if (length(metric_cols) == 0) return(NULL)
+      main_metric <- if (config$metric %in% metric_cols) {
+        config$metric
+      } else {
+        metric_cols[1]
+      }
+      r <- resultats %>%
+        mutate(across(all_of(metric_cols), as.numeric)) %>%
+        filter(!is.na(.data[[main_metric]]))
+      if (nrow(r) == 0) return(NULL)
+
+      best_val <- max(r[[main_metric]])
+      list(
+        metrics = r %>%
+          slice_max(.data[[main_metric]], n = 1, with_ties = FALSE) %>%
+          select(all_of(metric_cols)),
+        score  = best_val,
+        n_tied = n_distinct(r$user[r[[main_metric]] >= best_val - tol])
+      )
+    }
+  }
+
+  # This attempt's own score, on the same scale as millor_intent()$score,
+  # or NA if it cannot be computed.
+  puntuacio_intent <- function(result) {
+    if (is.null(result)) return(NA_real_)
+    if (config$task_type == "regression") {
+      if (!all(c("RMSE", "MAE") %in% names(result))) return(NA_real_)
+      as.numeric(result$RMSE) + as.numeric(result$MAE)
+    } else {
+      metric_cols <- intersect(VALID_METRICS$classification, names(result))
+      if (length(metric_cols) == 0) return(NA_real_)
+      main_metric <- if (config$metric %in% metric_cols) {
+        config$metric
+      } else {
+        metric_cols[1]
+      }
+      as.numeric(result[[main_metric]])
+    }
+  }
+
+  # Four significant digits, never scientific: readable for errors in the
+  # hundreds (prices) and for rates between 0 and 1 alike.
+  fmt_metric <- function(x) {
+    format(signif(as.numeric(x), 4), scientific = FALSE, trim = TRUE)
+  }
+
+  # The line that tells the student what to beat. The author of the best
+  # attempt is never named. If this attempt IS the best, the line
+  # congratulates instead, and says so differently when the top is shared.
+  #
+  # The attempt is already on disk when the feedback renders, so it is part
+  # of the benchmark: a student in the lead always matches the best score
+  # exactly rather than beating it.
+  linia_millor <- function(result = NULL) {
+    best <- millor_intent(llegeix_benchmark())
+    if (is.null(best) || nrow(best$metrics) == 0) return("")
+
+    vals <- vapply(
+      names(best$metrics),
+      function(nm) sprintf("%s: <strong>%s</strong>", nm,
+                           fmt_metric(best$metrics[[nm]])),
+      character(1)
+    )
+    vals <- paste(vals, collapse = " &nbsp;&middot;&nbsp; ")
+
+    meu <- puntuacio_intent(result)
+    lidera <- !is.na(meu) && (
+      if (config$task_type == "regression") meu <= best$score + 1e-9
+      else                                  meu >= best$score - 1e-9
+    )
+
+    capcalera <- if (!lidera) {
+      "&#127919; <strong>Best attempt so far.</strong>"
+    } else if (best$n_tied <= 1) {
+      "&#127942; <strong>Congratulations! The best attempt so far is yours.</strong>"
+    } else {
+      sprintf(paste0("&#127942; <strong>Well done! You are at the top, ",
+                     "tied with %d other%s.</strong>"),
+              best$n_tied - 1L, if (best$n_tied - 1L == 1L) "" else "s")
+    }
+
+    paste0(capcalera, "<br>", vals)
+  }
+
+  # -------------------------------------------------------------
   # Idle-time consolidation: once per minute, check whether the
   # newest pending CSV is older than the configured idle window.
   # If so, consolidate (RData + move to processed/). The lock in
@@ -454,11 +582,15 @@ server <- function(input, output, session) {
   # -------------------------------------------------------------
   output$Answer <- renderUI({
     result <- attempt_result()
+    millor <- linia_millor(result)
+
     if (is.null(result)) {
-      return(HTML(paste0(
+      intro <- paste0(
         "<em>The chart below shows the live class benchmark. ",
         "Upload your file and press 'Get result' to see your attempt.</em>"
-      )))
+      )
+      if (nzchar(millor)) intro <- paste0(intro, "<br><br>", millor)
+      return(HTML(intro))
     }
 
     n_missing <- attr(result, "n_missing")
@@ -472,6 +604,12 @@ server <- function(input, output, session) {
       ~ sprintf("<strong>&#9989; %s:</strong> %s", .x, result[[.x]])
     )
     message <- paste(metric_lines, collapse = "<br>")
+
+    # What they are competing against, in writing. Includes this very
+    # attempt, so if they just took the lead the two agree.
+    if (nzchar(millor)) {
+      message <- paste0(message, "<br><br>", millor)
+    }
 
     if (!is.null(n_missing) && n_missing > 0) {
       percent_missing <- round(100 * n_missing / n_total, 1)
