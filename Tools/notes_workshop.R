@@ -30,11 +30,11 @@ library(readxl)
 
 # ======================= CONFIGURATION =====================================
 
-WORKSHOP  <- "W1"
+WORKSHOP  <- "W4"
 TASK_TYPE <- "regression"        # "regression" | "classification"
 
-RDATA_FILE        <- "W01.RData"
-ASSIGNACIO_FILE   <- "grups_W1.xlsx"
+RDATA_FILE        <- "W04.RData"
+ASSIGNACIO_FILE   <- "grups_W4.xlsx"
 ASSIGNACIO_SHEET  <- "ASSIGNACIO"
 PARTICIPANTS_CSV  <- "participants.csv"      # Número ID ; Email
 
@@ -45,10 +45,10 @@ PARTICIPANTS_XLSX <- "participants.xlsx"     # Nom, ID
 
 # Session windows, in local time. Only attempts inside one of these count.
 # COURTESY_MIN is added to the end of every window.
+# Una entrada per dia; les sessions d'aquell dia, com a "inici-fi".
 WINDOWS <- list(
-  c("2026-09-29 13:00:00", "2026-09-29 14:00:00"),
-  c("2026-09-30 13:00:00", "2026-09-30 14:00:00"),
-  c("2026-09-30 16:00:00", "2026-09-30 17:00:00")
+  "2026-10-19" = "13:00-14:00",
+  "2026-10-21" = c("13:00-14:00", "16:00-17:00")
 )
 COURTESY_MIN <- 5
 TZ           <- "Europe/Madrid"
@@ -58,13 +58,27 @@ EXCLUDE_USERS <- c("test", "francesc.martori@iqs.url.edu")
 NOTA_MIN   <- 3
 NOTA_MAX   <- 10
 E_MAX      <- 0.30     # excess over the best at which a group hits the floor
-                       # (0.30 = 30% worse than the best => NOTA_MIN)
+# (0.30 = 30% worse than the best => NOTA_MIN)
 W_POS      <- 0.5      # weight of the position component; 1 - W_POS distance
 BONUS_UP   <- 1.0      # reward for attempts above the group median
 BONUS_DOWN <- 0.25     # penalty below it, deliberately smaller
 
 W_ACC <- 0.50          # classification: weight of Accuracy; the other four
-                       # metrics share the rest equally
+# metrics share the rest equally
+
+# Which attempts are eligible for the grade.
+#   "tot"            every attempt
+#   "amb_model"      only attempts with the Gretl output attached. Matches
+#                    what the app tells the students and what it shows them
+#                    as the competition.
+#   "no_refutats"    drops only the attempts valida_models.R positively
+#                    refutes (delivered better than the declared model can
+#                    give). Does not penalise attempts the script failed to
+#                    reconstruct, which are the script's limitation.
+#   "nomes_validats" only attempts valida_models.R marks VALIDAT. Strict:
+#                    an unparsed paste costs the student the attempt.
+FILTRE        <- "amb_model"
+VALIDACIO_CSV <- "validacio_models.csv"   # only read by the last two
 
 OUT_FILE <- paste0("notes_", WORKSHOP, ".csv")
 
@@ -119,15 +133,45 @@ if ("workshop" %in% names(resultats)) {
 
 # ======================= 2. TIME WINDOWS ===================================
 
+# WINDOWS s'escriu amb el dia una sola vegada. S'accepta tambe el format
+# antic, parelles d'instants complets, per no trencar configuracions velles.
+expandeix_finestres <- function(w) {
+  out <- list()
+  dies <- names(w)
+  for (i in seq_along(w)) {
+    dia <- if (is.null(dies) || !nzchar(dies[i])) NA_character_ else dies[i]
+    if (is.na(dia)) {                         # format antic: c(inici, fi)
+      out[[length(out) + 1]] <- c(w[[i]][1], w[[i]][2])
+      next
+    }
+    for (franja in w[[i]]) {
+      h <- trimws(strsplit(franja, "-", fixed = TRUE)[[1]])
+      if (length(h) != 2)
+        stop("Franja mal escrita a WINDOWS (", dia, "): ", franja)
+      out[[length(out) + 1]] <- paste(dia, ifelse(nchar(h) == 5,
+                                                  paste0(h, ":00"), h))
+    }
+  }
+  out
+}
+
+FINESTRES <- expandeix_finestres(WINDOWS)
+
 in_any_window <- function(t) {
   keep <- rep(FALSE, length(t))
-  for (w in WINDOWS) {
+  for (w in FINESTRES) {
     from <- ymd_hms(w[1], tz = TZ)
     to   <- ymd_hms(w[2], tz = TZ) + minutes(COURTESY_MIN)
+    if (is.na(from) || is.na(to)) stop("Finestra no valida: ", paste(w, collapse = " / "))
     keep <- keep | (t >= from & t <= to)
   }
   keep
 }
+
+say("Session windows: ",
+    paste(vapply(FINESTRES, function(w)
+      paste0(substr(w[1], 1, 16), "-", substr(w[2], 12, 16)), character(1)),
+      collapse = ", "), "  (+", COURTESY_MIN, " min)")
 
 n_before <- nrow(resultats)
 resultats <- resultats %>%
@@ -236,6 +280,49 @@ intents <- intents[!duplicated(intents[, c("user", metric_cols)]), ]
 # the best result, never to the spread.
 say("Attempts used: ", nrow(intents))
 
+# ======================= 4b. ELIGIBILITY FILTER ============================
+# A missing validation file or a missing column never silently changes the
+# grades: the filter is skipped and the script says so.
+
+intents_tots <- intents        # abans del filtre, per saber qui va entregar
+n_abans <- nrow(intents)
+if (FILTRE == "amb_model") {
+  if (!"has_evidence" %in% names(intents)) {
+    say("WARNING: no has_evidence column, filter '", FILTRE, "' skipped.")
+  } else {
+    intents <- intents %>% filter(as.logical(has_evidence) %in% TRUE)
+  }
+  
+} else if (FILTRE %in% c("no_refutats", "nomes_validats")) {
+  if (!file.exists(VALIDACIO_CSV)) {
+    say("WARNING: ", VALIDACIO_CSV, " not found, filter '", FILTRE, "' skipped.")
+  } else if (!"attempt_id" %in% names(intents)) {
+    say("WARNING: attempts have no attempt_id, filter '", FILTRE, "' skipped.")
+  } else {
+    val <- read.delim(VALIDACIO_CSV, stringsAsFactors = FALSE)
+    if (!all(c("attempt_id", "estat") %in% names(val))) {
+      say("WARNING: ", VALIDACIO_CSV, " has no attempt_id/estat, filter skipped.")
+    } else {
+      intents <- intents %>%
+        left_join(val %>% select(attempt_id, estat), by = "attempt_id")
+      say("  validation states found:")
+      print(as.data.frame(table(intents$estat, useNA = "ifany")), row.names = FALSE)
+      intents <- if (FILTRE == "no_refutats") {
+        intents %>% filter(is.na(estat) | estat != "MILLOR QUE EL MODEL")
+      } else {
+        intents %>% filter(!is.na(estat), estat == "VALIDAT")
+      }
+    }
+  }
+  
+} else if (FILTRE != "tot") {
+  stop("FILTRE desconegut: ", FILTRE)
+}
+
+if (nrow(intents) != n_abans)
+  say("Filter '", FILTRE, "': ", n_abans, " -> ", nrow(intents), " attempts")
+if (nrow(intents) == 0) stop("No attempts left after the filter. Check FILTRE.")
+
 # ======================= 5. BEST ATTEMPT PER GROUP =========================
 
 millors <- intents %>%
@@ -247,8 +334,10 @@ millors <- intents %>%
 sense_intents <- setdiff(unique(grups$grup), millors$grup)
 if (length(sense_intents) > 0) {
   say("NOTE: ", length(sense_intents),
-      " group(s) with no valid attempt, left ungraded: ",
+      " group(s) with no attempt left after filtering: ",
       paste(sort(sense_intents), collapse = ", "))
+  say("      Those that did submit are floored at ", NOTA_MIN,
+      " further down; those that submitted nothing stay ungraded.")
 }
 
 say("Groups graded: ", nrow(millors))
@@ -333,6 +422,35 @@ notes_grup <- millors %>%
          best_user, best_nom, best_time,
          any_of(c("has_evidence", "attempt_id")))
 
+# A group that did submit but whose attempts were all removed by the filter
+# gets the floor, not a blank. Not attaching the model is a choice, and the
+# app warns on every attempt that an unattached one will not count. Groups
+# that submitted nothing at all are a different case and stay ungraded.
+exclosos <- setdiff(intersect(unique(intents_tots$grup), unique(grups$grup)),
+                    notes_grup$grup)
+if (length(exclosos) > 0) {
+  n_ex <- intents_tots %>% filter(grup %in% exclosos) %>%
+    count(grup, name = "intents")
+  sota <- membres %>%
+    filter(grup %in% exclosos) %>%
+    left_join(n_ex, by = "grup") %>%
+    mutate(intents     = coalesce(intents, 0L),
+           bonificacio = 0,
+           nota_base   = NOTA_MIN,
+           nota_final  = NOTA_MIN,
+           motiu       = paste0("cap intent passa el filtre '", FILTRE, "'"))
+  notes_grup <- bind_rows(notes_grup, sota) %>%
+    arrange(desc(nota_final), total_error)
+  say("NOTE: ", length(exclosos), " group(s) floored at ", NOTA_MIN,
+      " (submitted, but no attempt passes filter '", FILTRE, "'): ",
+      paste(sort(exclosos), collapse = ", "))
+}
+
+sense_res <- setdiff(unique(grups$grup), notes_grup$grup)
+if (length(sense_res) > 0)
+  say("NOTE: ", length(sense_res), " group(s) with no attempt at all, ",
+      "left ungraded: ", paste(sort(sense_res), collapse = ", "))
+
 # Model evidence: diagnostic only for now, it does not affect the grade.
 if ("has_evidence" %in% names(intents)) {
   ev <- intents %>%
@@ -372,3 +490,8 @@ notes_grup %>%
   ggplot(aes(nota, score)) +
   geom_boxplot() +
   labs(title = paste("Grade components —", WORKSHOP), x = NULL, y = NULL)
+notes_grup |> group_by(classe) |> summarise(
+  mean(nota_final, na.rm=TRUE),
+  mean(nota_pos, na.rm=TRUE),
+  mean(nota_dist, na.rm=TRUE),
+  mean(bonificacio, na.rm=TRUE))

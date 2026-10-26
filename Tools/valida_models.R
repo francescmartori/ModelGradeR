@@ -148,7 +148,42 @@ say("Intents: ", nrow(intents), "   alumnes: ", n_distinct(intents$user),
 # El text sol arribar amb la codificacio trencada (UTF-8 llegit com a CP1252):
 # "regresion" com a "regresiA3n" i el menys U+2212 com a tres caracters. Les
 # expressions toleren qualsevol cosa al lloc dels accents.
+# Gretl tambe pot copiar el model en LaTeX, i tres alumnes ho van fer. Alla
+# els numeros van partits en dues columnes amb & com a separador decimal
+# (0&343999 vol dir 0.343999), el menys es $-$ i cada coeficient ocupa cinc
+# linies. Es converteix al format de text pla abans de parsejar.
+desllatexa <- function(t) {
+  if (!grepl("\\begin{tabular}", t, fixed = TRUE)) return(t)
+  t <- gsub("$-$", "-", t, fixed = TRUE)
+  t <- gsub("\\_", "_", t, fixed = TRUE)
+  t <- gsub("\\\\textrm\\{([^}]*)\\}", "\\1", t, perl = TRUE)
+  t <- gsub("$", "", t, fixed = TRUE)
+  t <- gsub("\\\\(vspace|hline|smallskip|medskip)\\s*(\\{[^}]*\\})?", "", t, perl = TRUE)
+  t <- gsub("\\\\multicolumn\\{[^}]*\\}\\{[^}]*\\}", "", t, perl = TRUE)
+  t <- gsub("--", "-", t, fixed = TRUE)
+
+  i1 <- regexpr("\\begin{tabular}", t, fixed = TRUE)
+  i2 <- regexpr("\\end{tabular}",   t, fixed = TRUE)
+  if (i1 < 0 || i2 < 0 || i2 < i1) return(t)
+  coef  <- substr(t, i1 + attr(i1, "match.length"), i2 - 1)
+  resta <- paste0(substr(t, 1, i1 - 1),
+                  substr(t, i2 + attr(i2, "match.length"), nchar(t)))
+
+  numfix <- function(s) gsub("([0-9])&([0-9])", "\\1.\\2", s, perl = TRUE)
+  files <- strsplit(numfix(coef), "\\\\", fixed = TRUE)[[1]]
+  files <- gsub("\\[[0-9]+ex\\]", "", files, perl = TRUE)
+  files <- gsub("&", "   ", files, fixed = TRUE)
+  files <- trimws(gsub("[ \t\r\n]+", " ", files))
+  files <- paste0("  ", files[nzchar(files)])
+
+  resta <- gsub("\\\\(begin|end)\\{[^}]*\\}", "", resta, perl = TRUE)
+  resta <- gsub("&", "   ", numfix(resta), fixed = TRUE)
+  resta <- gsub("\\\\", "\n", resta, fixed = TRUE)
+  paste0(resta, "\n", paste(files, collapse = "\n"))
+}
+
 parseja <- function(txt) {
+  txt <- desllatexa(txt)
   txt <- gsub("−|âˆ’|âˆ−", "-", txt)
   txt <- gsub("\\\\", "", txt)
   g1 <- function(p) {
@@ -158,7 +193,10 @@ parseja <- function(txt) {
   }
   linies <- strsplit(txt, "\r\n|\n|\r", perl = TRUE)[[1]]
   pat <- "^\\s{2,}(\\S+)\\s+(-?[0-9.]+(?:[eE][+-]?[0-9]+)?)(\\s|$)"
-  hit <- grep(pat, linies, perl = TRUE)
+  # regexec i no regexpr: cal extreure els grups, i sub() nomes substitueix
+  # la part que casa i deixa la resta de la linia enganxada.
+  mm  <- regmatches(linies, regexec(pat, linies, perl = TRUE))
+  hit <- which(vapply(mm, length, integer(1)) > 0)
   # Gretl escriu "observaciones 1-179 (n = 178)" quan descarta files: el que
   # val es el (n = ...), no el rang.
   nobs <- g1("\\(n\\s*=\\s*([0-9]+)\\)")
@@ -167,8 +205,11 @@ parseja <- function(txt) {
        mitjana = as.numeric(g1("Media de la vble\\. dep\\.\\s+([0-9.]+)")),
        dt_reg  = as.numeric(g1("D\\.T\\. de la regresi.{0,3}n\\s+([0-9.]+)")),
        nobs    = as.numeric(nobs),
-       noms    = sub(pat, "\\1", linies[hit], perl = TRUE),
-       coefs   = as.numeric(sub(pat, "\\2", linies[hit], perl = TRUE)))
+       noms    = if (length(hit)) vapply(mm[hit], function(x) x[2], character(1))
+                 else character(0),
+       coefs   = if (length(hit)) as.numeric(vapply(mm[hit], function(x) x[3],
+                                                    character(1)))
+                 else numeric(0))
 }
 
 # --------------------------- 3. CANDIDATS ----------------------------------
@@ -211,6 +252,7 @@ identifica <- function(p) {
   regs <- p$noms[p$noms != "const"]
   if (length(regs) == 0 || length(p$coefs) != length(regs) + 1) return(NULL)
   gc <- p$coefs; k <- length(gc)
+  if (any(!is.finite(gc))) return(NULL)   # coeficient no llegit: no s'intenta
 
   # La resposta, per la mitjana que reporta Gretl. Es compara sobre tot el
   # train amb tolerancia ampla: les transformacions difereixen en ordres de
@@ -284,7 +326,22 @@ descriu <- function(idf) {
 
 # --------------------------- 5. VALIDACIO ----------------------------------
 
-say("Reconstruint models...")
+# Control del parseig abans de res: si aixo falla, tota la resta es inutil i
+# val mes veure-ho aqui que no pas rebre 264 "no reconstruible" sense motiu.
+ctrl <- lapply(models$model_text, function(t)
+  tryCatch(parseja(t), error = function(e) NULL))
+say("\nParseig dels ", length(ctrl), " textos enganxats:")
+say("  amb taula de coeficients llegida: ",
+    sum(vapply(ctrl, function(p) !is.null(p) && length(p$coefs) > 0 &&
+                 all(is.finite(p$coefs)), logical(1))))
+say("  amb D.T. de la regressio:         ",
+    sum(vapply(ctrl, function(p) !is.null(p) && !is.na(p$dt_reg), logical(1))))
+say("  amb nombre d'observacions:        ",
+    sum(vapply(ctrl, function(p) !is.null(p) && !is.na(p$nobs), logical(1))))
+say("  sense cap model a dins:           ",
+    sum(vapply(ctrl, function(p) is.null(p) || length(p$coefs) == 0, logical(1))))
+
+say("\nReconstruint models...")
 cache <- new.env(hash = TRUE, parent = emptyenv())
 files <- lapply(seq_len(nrow(models)), function(i) {
   txt <- models$model_text[i]
