@@ -162,8 +162,9 @@ server <- function(input, output, session) {
   # The attempt is already on disk when the feedback renders, so it is part
   # of the benchmark: a student in the lead always matches the best score
   # exactly rather than beating it.
-  linia_millor <- function(result = NULL) {
-    best <- millor_intent(llegeix_benchmark())
+  linia_millor <- function(result = NULL, resultats = NULL) {
+    if (is.null(resultats)) resultats <- llegeix_benchmark()
+    best <- millor_intent(resultats)
     if (is.null(best) || nrow(best$metrics) == 0) return("")
 
     vals <- vapply(
@@ -198,6 +199,70 @@ server <- function(input, output, session) {
     }
 
     paste0(capcalera, "<br>", vals)
+  }
+
+  # Score of every row of the store, in the direction the task is scored, so
+  # that it can be compared with puntuacio_intent().
+  puntuacions <- function(resultats) {
+    if (config$task_type == "regression") {
+      if (!all(c("RMSE", "MAE") %in% names(resultats))) return(NULL)
+      as.numeric(resultats$RMSE) + as.numeric(resultats$MAE)
+    } else {
+      metric_cols <- intersect(VALID_METRICS$classification, names(resultats))
+      if (length(metric_cols) == 0) return(NULL)
+      main_metric <- if (config$metric %in% metric_cols) {
+        config$metric
+      } else {
+        metric_cols[1]
+      }
+      as.numeric(resultats[[main_metric]])
+    }
+  }
+
+  # Where this attempt stands, among students and among the student's own
+  # attempts. The ranking across students compares each student's BEST
+  # attempt, which is what the competition is about; ranking raw attempts
+  # would just reward whoever submitted most.
+  #
+  # Only shown for an attempt that is part of the competition: an attempt
+  # without the model attached has no position, and the notice below the
+  # metrics already says why.
+  linia_posicio <- function(result, resultats) {
+    if (is.null(result)) return("")
+    if (isTRUE(config$competition_requires_model) &&
+        !isTRUE(result$has_evidence)) return("")
+
+    r <- intents_elegibles(resultats)
+    if (is.null(r) || nrow(r) == 0 || !"user" %in% names(r)) return("")
+    sc <- puntuacions(r)
+    meu <- puntuacio_intent(result)
+    if (is.null(sc) || is.na(meu)) return("")
+
+    ok <- is.finite(sc)
+    r <- r[ok, , drop = FALSE]; sc <- sc[ok]
+    if (length(sc) == 0) return("")
+    millor_es_menys <- config$task_type == "regression"
+    tol <- 1e-9
+
+    # Posicio entre alumnes, comparant el millor intent de cadascun
+    millors <- tapply(sc, r$user, if (millor_es_menys) min else max)
+    n_alum  <- length(millors)
+    guanyen <- if (millor_es_menys) sum(millors < meu - tol) else
+      sum(millors > meu + tol)
+    pos_global <- guanyen + 1L
+
+    # Posicio entre els intents propis
+    meus <- sc[r$user == result$user]
+    if (length(meus) == 0) meus <- meu
+    g2 <- if (millor_es_menys) sum(meus < meu - tol) else sum(meus > meu + tol)
+    pos_propi <- g2 + 1L
+
+    paste0("&#128202; This attempt ranks <strong>", pos_global,
+           "</strong> of ", n_alum, " students",
+           if (length(meus) > 1)
+             paste0(", and <strong>", pos_propi, "</strong> of your ",
+                    length(meus), " attempts") else "",
+           ".")
   }
 
   # -------------------------------------------------------------
@@ -581,13 +646,8 @@ server <- function(input, output, session) {
         labs(
           title    = "Benchmark of your results",
           subtitle = sprintf(
-            "Your result (red) vs. best result (blue). Main metric: %s. Class: %s",
-            main_metric,
-            if (nomes_models) {
-              sprintf("%d attempts with the model attached.", nrow(resultats))
-            } else {
-              sprintf("all %d attempts so far.", nrow(resultats))
-            }
+            "Your result (red) vs. best result (blue) – main metric: %s",
+            main_metric
           ),
           color = "Legend",
           shape = "Legend"
@@ -627,7 +687,10 @@ server <- function(input, output, session) {
   # -------------------------------------------------------------
   output$Answer <- renderUI({
     result <- attempt_result()
-    millor <- linia_millor(result)
+    # Una sola lectura del magatzem per a les dues linies.
+    benchmark <- llegeix_benchmark()
+    millor    <- linia_millor(result, benchmark)
+    posicio   <- linia_posicio(result, benchmark)
 
     if (is.null(result)) {
       intro <- paste0(
@@ -654,6 +717,9 @@ server <- function(input, output, session) {
     # attempt, so if they just took the lead the two agree.
     if (nzchar(millor)) {
       message <- paste0(message, "<br><br>", millor)
+    }
+    if (nzchar(posicio)) {
+      message <- paste0(message, "<br>", posicio)
     }
 
     if (!is.null(n_missing) && n_missing > 0) {
