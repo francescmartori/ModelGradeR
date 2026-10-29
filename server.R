@@ -201,6 +201,37 @@ server <- function(input, output, session) {
     paste0(capcalera, "<br>", vals)
   }
 
+  # The chart trims attempts whose error is far above the median, so that one
+  # broken submission does not flatten the boxplot for everyone. When the
+  # student's own attempt is one of them it simply vanishes from the chart,
+  # with no red cross and no explanation. This says so: the attempt counts,
+  # it is only too far out to be drawn.
+  #
+  # Same thresholds as renderPlot, on the same population.
+  linia_fora_grafic <- function(result, resultats) {
+    if (is.null(result) || config$task_type != "regression") return("")
+    r <- intents_elegibles(resultats)
+    if (is.null(r) || nrow(r) == 0) return("")
+    if (!all(c("RMSE", "MAE") %in% names(r))) return("")
+
+    rmse <- as.numeric(r$RMSE); mae <- as.numeric(r$MAE)
+    ok <- is.finite(rmse) & is.finite(mae)
+    rmse <- rmse[ok]; mae <- mae[ok]
+    if (length(rmse) == 0) return("")
+
+    llindar_rmse <- median(rmse) + 3 * (median(rmse) - min(rmse))
+    llindar_mae  <- median(mae)  + 3 * (median(mae)  - min(mae))
+    meu_rmse <- as.numeric(result$RMSE); meu_mae <- as.numeric(result$MAE)
+    if (!is.finite(meu_rmse) || !is.finite(meu_mae)) return("")
+    if (meu_rmse <= llindar_rmse && meu_mae <= llindar_mae) return("")
+
+    paste0("&#9888;&#65039; <strong>Your attempt is not drawn on the chart.</strong> ",
+           "It is recorded and it counts, but its error is too far above the ",
+           "rest of the class to fit in the plot. Check your predictions: ",
+           "this usually means a mistake in the file or a specification that ",
+           "is far off.")
+  }
+
   # Score of every row of the store, in the direction the task is scored, so
   # that it can be compared with puntuacio_intent().
   puntuacions <- function(resultats) {
@@ -691,6 +722,7 @@ server <- function(input, output, session) {
     benchmark <- llegeix_benchmark()
     millor    <- linia_millor(result, benchmark)
     posicio   <- linia_posicio(result, benchmark)
+    fora      <- linia_fora_grafic(result, benchmark)
 
     if (is.null(result)) {
       intro <- paste0(
@@ -712,6 +744,10 @@ server <- function(input, output, session) {
       ~ sprintf("<strong>&#9989; %s:</strong> %s", .x, result[[.x]])
     )
     message <- paste(metric_lines, collapse = "<br>")
+
+    if (nzchar(fora)) {
+      message <- paste0(message, "<br><br>", fora)
+    }
 
     # What they are competing against, in writing. Includes this very
     # attempt, so if they just took the lead the two agree.
