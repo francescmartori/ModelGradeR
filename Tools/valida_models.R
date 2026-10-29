@@ -46,6 +46,25 @@ MAX_FITS  <- 40000  # regressions provades com a maxim per model
 # alhora, en el 0,7%.
 EXIGEIX_MAE <- TRUE
 
+# Tecniques fora del temari que apareixen al text enganxat. Es un detector
+# de "aixo no ho he explicat", no de deshonestedat: qui llegeix pel seu
+# compte sortira aqui, i es el que vols que passi.
+#
+# nivell 2: no s'arriben des dels menus de Gretl, cal escriure-ho
+# nivell 1: son a dos clics, les fa servir molta gent i valen poc com a senyal
+TECNIQUES <- list(
+  list(p = "smear|duan",                              n = "smearing",      t = 2),
+  list(p = "\\bsmpl\\b|\\bfcast\\b|\\bscalar\\b|\\bloop\\b|\\bforeach\\b|\\bgenr\\b",
+                                                      n = "script hansl",  t = 2),
+  list(p = "box.?cox",                                n = "Box-Cox",       t = 2),
+  list(p = "newey|\\bHAC\\b",                         n = "HAC",           t = 2),
+  list(p = "\\bwls\\b|cuadrados ponderados",          n = "MCP",           t = 2),
+  list(p = "\\blogit\\b|\\bprobit\\b|\\btobit\\b",    n = "model limitat", t = 2),
+  list(p = "--robust|robustas",                       n = "robustos",      t = 1),
+  list(p = "eliminaci.n secuencial|--auto",           n = "elim. auto",    t = 1),
+  list(p = "white",                                   n = "White",         t = 1)
+)
+
 TZ      <- "Europe/Madrid"
 EXCLOU  <- c("test", "francesc.martori@iqs.url.edu")
 SORTIDA <- "validacio_models.csv"
@@ -182,6 +201,20 @@ desllatexa <- function(t) {
   paste0(resta, "\n", paste(files, collapse = "\n"))
 }
 
+# S'examina el text CRU, abans de convertir res: que hagin enganxat un script
+# en comptes de la finestra del model ja es part del senyal.
+detecta_tecniques <- function(txt) {
+  trobades <- character(0); nivell <- 0L
+  for (tc in TECNIQUES) {
+    if (grepl(tc$p, txt, perl = TRUE, ignore.case = TRUE)) {
+      trobades <- c(trobades, tc$n)
+      nivell <- max(nivell, tc$t)
+    }
+  }
+  list(noms = if (length(trobades)) paste(trobades, collapse = ", ") else "",
+       nivell = nivell)
+}
+
 parseja <- function(txt) {
   txt <- desllatexa(txt)
   txt <- gsub("−|âˆ’|âˆ−", "-", txt)
@@ -191,8 +224,10 @@ parseja <- function(txt) {
     if (length(m) == 0) return(NA_character_)
     sub(p, "\\1", m, perl = TRUE)
   }
+  # num(): el Gretl en catala escriu la coma decimal, -147,878 i no -147.878.
+  num <- function(x) as.numeric(gsub(",", ".", x, fixed = TRUE))
   linies <- strsplit(txt, "\r\n|\n|\r", perl = TRUE)[[1]]
-  pat <- "^\\s{2,}(\\S+)\\s+(-?[0-9.]+(?:[eE][+-]?[0-9]+)?)(\\s|$)"
+  pat <- "^\\s{2,}(\\S+)\\s+(-?[0-9]+(?:[.,][0-9]+)?(?:[eE][+-]?[0-9]+)?)(\\s|$)"
   # regexec i no regexpr: cal extreure els grups, i sub() nomes substitueix
   # la part que casa i deixa la resta de la linia enganxada.
   mm  <- regmatches(linies, regexec(pat, linies, perl = TRUE))
@@ -200,15 +235,17 @@ parseja <- function(txt) {
   # Gretl escriu "observaciones 1-179 (n = 178)" quan descarta files: el que
   # val es el (n = ...), no el rang.
   nobs <- g1("\\(n\\s*=\\s*([0-9]+)\\)")
-  if (is.na(nobs)) nobs <- g1("observaciones\\s+[0-9]+-([0-9]+)")
-  list(dep     = g1("Variable dependiente:\\s*(\\S+)"),
-       mitjana = as.numeric(g1("Media de la vble\\. dep\\.\\s+([0-9.]+)")),
-       dt_reg  = as.numeric(g1("D\\.T\\. de la regresi.{0,3}n\\s+([0-9.]+)")),
+  if (is.na(nobs)) nobs <- g1("observaci(?:ones|ons)\\s+[0-9]+-([0-9]+)")
+  # Bilingue: amb el Gretl en catala les etiquetes son "Variable dependent",
+  # "Mitj. de la vble. dep." i "D.T. de la regressio", amb dues esses.
+  list(dep     = g1("Variable depend(?:ent|iente):\\s*(\\S+)"),
+       mitjana = num(g1("(?:Media|Mitj\\.) de la vble\\. dep\\.\\s+([0-9][0-9.,]*)")),
+       dt_reg  = num(g1("D\\.T\\. de la regress?i.{0,3}n\\s+([0-9][0-9.,]*)")),
        nobs    = as.numeric(nobs),
        noms    = if (length(hit)) vapply(mm[hit], function(x) x[2], character(1))
                  else character(0),
-       coefs   = if (length(hit)) as.numeric(vapply(mm[hit], function(x) x[3],
-                                                    character(1)))
+       coefs   = if (length(hit)) num(vapply(mm[hit], function(x) x[3],
+                                             character(1)))
                  else numeric(0))
 }
 
@@ -352,13 +389,17 @@ files <- lapply(seq_len(nrow(models)), function(i) {
   } else {
     p   <- tryCatch(parseja(txt), error = function(e) NULL)
     idf <- if (is.null(p)) NULL else tryCatch(identifica(p), error = function(e) NULL)
+    tc  <- tryCatch(detecta_tecniques(txt), error = function(e) list(noms = "", nivell = 0L))
     r <- if (is.null(idf)) list(esp = NA_character_, rmse = NA_real_, mae = NA_real_)
          else { m <- avalua(idf)
                 list(esp = descriu(idf), rmse = m[["rmse"]], mae = m[["mae"]]) }
+    r$tecniques <- tc$noms; r$nivell <- tc$nivell
     assign(clau, r, envir = cache)
   }
   data.frame(attempt_id = models$attempt_id[i], especificacio = r$esp,
-             rmse_model = r$rmse, mae_model = r$mae, stringsAsFactors = FALSE)
+             rmse_model = r$rmse, mae_model = r$mae,
+             tecniques = r$tecniques, nivell = r$nivell,
+             stringsAsFactors = FALSE)
 }) %>% bind_rows()
 
 v <- intents %>%
@@ -374,6 +415,19 @@ v <- intents %>%
       desvia <= TOL_RMSE        ~ "NOMES ENCAIXA EL RMSE",
       RMSE < rmse_model         ~ "MILLOR QUE EL MODEL",
       TRUE                      ~ "PITJOR QUE EL MODEL"
+    ),
+    # Creuament dels dos eixos. Cap d'aquestes combinacions prova res per si
+    # sola; el que les fa valer es que coincideixin.
+    revisar = case_when(
+      nivell >= 2 & estat == "NO RECONSTRUIBLE" ~
+        "tecnica fora de temari i no es una sortida de model",
+      nivell >= 2 & estat == "MILLOR QUE EL MODEL" ~
+        "tecnica fora de temari i entrega millor que el model",
+      estat == "MILLOR QUE EL MODEL" ~
+        "entrega millor que el model declarat",
+      nivell >= 2 ~
+        "tecnica fora de temari",
+      TRUE ~ ""
     )
   )
 
@@ -394,6 +448,39 @@ if (nrow(m) == 0) say("  cap") else
                   entregat = round(RMSE, 1), del_model = round(rmse_model, 1),
                   diferencia = paste0(round(100 * desvia, 1), "%")) %>%
   as.data.frame() %>% print(row.names = FALSE)
+
+say("\n", strrep("=", 72))
+say("PER REVISAR, de mes a menys especific")
+say(strrep("=", 72))
+rv <- v %>% filter(nzchar(revisar)) %>%
+  arrange(match(revisar, c("tecnica fora de temari i no es una sortida de model",
+                           "tecnica fora de temari i entrega millor que el model",
+                           "entrega millor que el model declarat",
+                           "tecnica fora de temari")), user, hora)
+if (nrow(rv) == 0) say("  cap") else {
+  rv %>% transmute(user, hora, revisar, tecniques,
+                   entregat = round(RMSE, 1),
+                   del_model = ifelse(is.na(rmse_model), NA, round(rmse_model, 1))) %>%
+    as.data.frame() %>% print(row.names = FALSE)
+  say("\n  Les dues primeres categories son les que combinen els dos eixos.")
+  say("  Cap d'aquestes files prova res: son les que valen la pena mirar.")
+}
+
+say("\n", strrep("-", 72))
+say("FORA DE TEMARI: tecniques que cal escriure, no son als menus de Gretl")
+say(strrep("-", 72))
+ft <- v %>% filter(nivell >= 2) %>% arrange(user, hora)
+if (nrow(ft) == 0) say("  cap") else {
+  ft %>% transmute(user, hora, tecniques, estat) %>%
+    as.data.frame() %>% print(row.names = FALSE)
+  say("\n  No vol dir trampa: vol dir que han anat mes enlla del que has ",
+      "explicat.\n  La manera de saber-ho es preguntar-los que fa aquella ",
+      "tecnica.")
+}
+
+n1 <- v %>% filter(nivell == 1)
+say("\n  (a dos clics dels menus, poc informatiu: ", nrow(n1), " intents de ",
+    n_distinct(n1$user), " alumnes)")
 
 say("\n", strrep("-", 72))
 say("NOMES ENCAIXA EL RMSE: el MAE diu que les prediccions no son les mateixes")
@@ -428,7 +515,8 @@ v %>% filter(!is.na(especificacio)) %>% count(especificacio, name = "intents") %
 
 out <- v %>%
   select(user, hora, any_of(c("attempt_id", "RMSE", "MAE", "has_evidence")),
-         especificacio, rmse_model, mae_model, desvia, desv_mae, estat) %>%
+         especificacio, rmse_model, mae_model, desvia, desv_mae, estat,
+         tecniques, nivell, revisar) %>%
   arrange(user, hora)
 write.table(out, SORTIDA, sep = "\t", dec = ".", row.names = FALSE,
             quote = FALSE, na = "")

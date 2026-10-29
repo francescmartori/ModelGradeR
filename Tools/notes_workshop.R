@@ -30,11 +30,11 @@ library(readxl)
 
 # ======================= CONFIGURATION =====================================
 
-WORKSHOP  <- "W4"
+WORKSHOP  <- "W1"
 TASK_TYPE <- "regression"        # "regression" | "classification"
 
-RDATA_FILE        <- "W04.RData"
-ASSIGNACIO_FILE   <- "grups_W4.xlsx"
+RDATA_FILE        <- "W01.RData"
+ASSIGNACIO_FILE   <- "grups_W1.xlsx"
 ASSIGNACIO_SHEET  <- "ASSIGNACIO"
 PARTICIPANTS_CSV  <- "participants.csv"      # Número ID ; Email
 
@@ -47,8 +47,8 @@ PARTICIPANTS_XLSX <- "participants.xlsx"     # Nom, ID
 # COURTESY_MIN is added to the end of every window.
 # Una entrada per dia; les sessions d'aquell dia, com a "inici-fi".
 WINDOWS <- list(
-  "2026-10-19" = "13:00-14:00",
-  "2026-10-21" = c("13:00-14:00", "16:00-17:00")
+  "2026-09-29" = "13:00-14:00",
+  "2026-09-30" = c("13:00-14:00", "16:00-17:00")
 )
 COURTESY_MIN <- 5
 TZ           <- "Europe/Madrid"
@@ -58,13 +58,13 @@ EXCLUDE_USERS <- c("test", "francesc.martori@iqs.url.edu")
 NOTA_MIN   <- 3
 NOTA_MAX   <- 10
 E_MAX      <- 0.30     # excess over the best at which a group hits the floor
-# (0.30 = 30% worse than the best => NOTA_MIN)
+                       # (0.30 = 30% worse than the best => NOTA_MIN)
 W_POS      <- 0.5      # weight of the position component; 1 - W_POS distance
 BONUS_UP   <- 1.0      # reward for attempts above the group median
 BONUS_DOWN <- 0.25     # penalty below it, deliberately smaller
 
 W_ACC <- 0.50          # classification: weight of Accuracy; the other four
-# metrics share the rest equally
+                       # metrics share the rest equally
 
 # Which attempts are eligible for the grade.
 #   "tot"            every attempt
@@ -287,12 +287,19 @@ say("Attempts used: ", nrow(intents))
 intents_tots <- intents        # abans del filtre, per saber qui va entregar
 n_abans <- nrow(intents)
 if (FILTRE == "amb_model") {
-  if (!"has_evidence" %in% names(intents)) {
-    say("WARNING: no has_evidence column, filter '", FILTRE, "' skipped.")
-  } else {
+  # model_gretl is the structural check written by consolidation: there is a
+  # real Gretl OLS output in the paste. has_evidence only counts characters,
+  # so it is the fallback for stores written before that check existed.
+  if ("model_gretl" %in% names(intents)) {
+    intents <- intents %>% filter(as.logical(model_gretl) %in% TRUE)
+  } else if ("has_evidence" %in% names(intents)) {
+    say("NOTE: no model_gretl column, falling back to has_evidence ",
+        "(character count only).")
     intents <- intents %>% filter(as.logical(has_evidence) %in% TRUE)
+  } else {
+    say("WARNING: no has_evidence column, filter '", FILTRE, "' skipped.")
   }
-  
+
 } else if (FILTRE %in% c("no_refutats", "nomes_validats")) {
   if (!file.exists(VALIDACIO_CSV)) {
     say("WARNING: ", VALIDACIO_CSV, " not found, filter '", FILTRE, "' skipped.")
@@ -314,7 +321,7 @@ if (FILTRE == "amb_model") {
       }
     }
   }
-  
+
 } else if (FILTRE != "tot") {
   stop("FILTRE desconegut: ", FILTRE)
 }
@@ -490,8 +497,3 @@ notes_grup %>%
   ggplot(aes(nota, score)) +
   geom_boxplot() +
   labs(title = paste("Grade components —", WORKSHOP), x = NULL, y = NULL)
-notes_grup |> group_by(classe) |> summarise(
-  mean(nota_final, na.rm=TRUE),
-  mean(nota_pos, na.rm=TRUE),
-  mean(nota_dist, na.rm=TRUE),
-  mean(bonificacio, na.rm=TRUE))
