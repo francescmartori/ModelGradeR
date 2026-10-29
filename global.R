@@ -207,20 +207,6 @@ consolidar_resultats <- function(path        = config$results_path,
       models <- distinct(bind_rows(models, nous_models))
     }
 
-    # Structural check, done here and not live: has_evidence only counts
-    # characters, so filler text clears it. model_gretl says whether there is
-    # really a Gretl OLS output in the paste. Recomputed for every row, so an
-    # improvement to te_model_gretl() applies to old attempts too.
-    if (nrow(models) > 0 && "model_text" %in% names(models)) {
-      models$model_gretl <- vapply(models$model_text, te_model_gretl,
-                                   logical(1), USE.NAMES = FALSE)
-      resultats$model_gretl <- FALSE
-      if ("attempt_id" %in% names(resultats)) {
-        ok <- models$attempt_id[models$model_gretl]
-        resultats$model_gretl <- resultats$attempt_id %in% ok
-      }
-    }
-
     save(resultats, models, file = output_file)
 
     # Move processed files only after the RData is safely written.
@@ -229,6 +215,28 @@ consolidar_resultats <- function(path        = config$results_path,
     if (length(model_files) > 0) {
       file.rename(model_files,
                   file.path(processed, basename(model_files)))
+    }
+  }
+
+  # Structural check, done here and not live: has_evidence only counts
+  # characters, so filler text clears it. model_gretl says whether there is
+  # really a Gretl OLS output in the paste.
+  #
+  # Outside the block above on purpose: an already consolidated store has no
+  # pending files, and otherwise it would never gain the column. Recomputed
+  # for every row, so an improvement to te_model_gretl() reaches old
+  # attempts too.
+  if (nrow(models) > 0 && "model_text" %in% names(models)) {
+    nou <- vapply(models$model_text, te_model_gretl, logical(1),
+                  USE.NAMES = FALSE)
+    res_nou <- "attempt_id" %in% names(resultats) &
+      resultats$attempt_id %in% models$attempt_id[nou]
+    canvia <- !identical(models$model_gretl, nou) ||
+      !identical(resultats$model_gretl, res_nou)
+    if (canvia) {
+      models$model_gretl    <- nou
+      resultats$model_gretl <- res_nou
+      save(resultats, models, file = output_file)
     }
   }
 
