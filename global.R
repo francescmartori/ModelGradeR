@@ -136,6 +136,40 @@ has_model_evidence <- function(model_text) {
 # recoverable source of truth if the RData is ever corrupted.
 # ---------------------------------------------------------------
 
+# Is there an actual Gretl OLS output in the pasted text? This is the cheap
+# half of the validation: a few regular expressions, no estimation. It tells
+# a real model apart from filler text that merely clears the character
+# minimum, and from a hansl script, which has neither a dependent variable
+# line nor a coefficient table.
+#
+# Gretl can also copy the model as LaTeX, where the minus is $-$, the
+# underscore is \_ and the numbers are split in two columns by &. Both forms
+# are accepted. The regexes tolerate anything in place of the accents,
+# because the text often arrives as UTF-8 read as CP1252.
+te_model_gretl <- function(txt) {
+  if (is.null(txt) || is.na(txt) || !nzchar(trimws(txt))) return(FALSE)
+  t <- gsub("−|âˆ’|âˆ−", "-", txt)
+  t <- gsub("$-$", "-", t, fixed = TRUE)
+  t <- gsub("\\_", "_", t, fixed = TRUE)
+  t <- gsub("([0-9])&([0-9])", "\\1.\\2", t, perl = TRUE)   # decimals LaTeX
+  t <- gsub("&", "   ", t, fixed = TRUE)
+
+  # Bilingual: many students run Gretl in Catalan, where it writes
+  # "Variable dependent", "Mitj. de la vble. dep." and "D.T. de la regressio"
+  # with a double s.
+  te_dep <- grepl("Variable depend(ent|iente)", t, perl = TRUE, ignore.case = TRUE)
+  te_dt  <- grepl("D\\.T\\. de la regress?i.{0,3}n", t, perl = TRUE)
+
+  # El Gretl en catala escriu la coma decimal: -147,878 i no -147.878.
+  linies <- strsplit(t, "\r\n|\n|\r", perl = TRUE)[[1]]
+  n_coef <- sum(grepl(
+    "^\\s{2,}\\S+\\s+-?[0-9]+(?:[.,][0-9]+)?(?:[eE][+-]?[0-9]+)?(\\s|$)",
+    linies, perl = TRUE))
+  te_taula <- grepl("\\begin{tabular}", t, fixed = TRUE)   # sortida LaTeX
+
+  (te_dep || te_dt) && (n_coef >= 2 || te_taula)
+}
+
 consolidar_resultats <- function(path        = config$results_path,
                                  output_file = config$resultats_rdata,
                                  processed   = processed_path) {
@@ -171,6 +205,20 @@ consolidar_resultats <- function(path        = config$results_path,
         stringsAsFactors = FALSE
       )
       models <- distinct(bind_rows(models, nous_models))
+    }
+
+    # Structural check, done here and not live: has_evidence only counts
+    # characters, so filler text clears it. model_gretl says whether there is
+    # really a Gretl OLS output in the paste. Recomputed for every row, so an
+    # improvement to te_model_gretl() applies to old attempts too.
+    if (nrow(models) > 0 && "model_text" %in% names(models)) {
+      models$model_gretl <- vapply(models$model_text, te_model_gretl,
+                                   logical(1), USE.NAMES = FALSE)
+      resultats$model_gretl <- FALSE
+      if ("attempt_id" %in% names(resultats)) {
+        ok <- models$attempt_id[models$model_gretl]
+        resultats$model_gretl <- resultats$attempt_id %in% ok
+      }
     }
 
     save(resultats, models, file = output_file)
