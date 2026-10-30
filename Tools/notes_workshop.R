@@ -292,6 +292,17 @@ if (FILTRE == "amb_model") {
   # so it is the fallback for stores written before that check existed.
   if ("model_gretl" %in% names(intents)) {
     intents <- intents %>% filter(as.logical(model_gretl) %in% TRUE)
+    # Una practica dubtosa no compta, encara que el model enganxat sigui una
+    # sortida de Gretl correcta.
+    if ("dubtosa" %in% names(intents)) {
+      n_dub <- sum(nzchar(intents$dubtosa), na.rm = TRUE)
+      if (n_dub > 0) {
+        say("  practiques dubtoses excloses: ", n_dub, " intents (",
+            paste(sort(unique(intents$dubtosa[nzchar(intents$dubtosa)])),
+                  collapse = ", "), ")")
+        intents <- intents %>% filter(!nzchar(dubtosa))
+      }
+    }
   } else if ("has_evidence" %in% names(intents)) {
     say("NOTE: no model_gretl column, falling back to has_evidence ",
         "(character count only).")

@@ -146,6 +146,22 @@ has_model_evidence <- function(model_text) {
 # underscore is \_ and the numbers are split in two columns by &. Both forms
 # are accepted. The regexes tolerate anything in place of the accents,
 # because the text often arrives as UTF-8 read as CP1252.
+# Practiques dubtoses: no s'han explicat a classe i no s'espera que les
+# entenguin. Es detecten a la consolidacio i es marquen a `dubtosa`, perque
+# el calcul de notes les pugui excloure.
+TECNIQUES_DUBTOSES <- list(
+  list(p = "smear|duan", n = "smearing")
+)
+
+practica_dubtosa <- function(txt) {
+  if (is.null(txt) || is.na(txt)) return("")
+  trobades <- character(0)
+  for (tc in TECNIQUES_DUBTOSES)
+    if (grepl(tc$p, txt, perl = TRUE, ignore.case = TRUE))
+      trobades <- c(trobades, tc$n)
+  if (length(trobades)) paste(trobades, collapse = ", ") else ""
+}
+
 te_model_gretl <- function(txt) {
   if (is.null(txt) || is.na(txt) || !nzchar(trimws(txt))) return(FALSE)
   t <- gsub("−|âˆ’|âˆ−", "-", txt)
@@ -229,13 +245,24 @@ consolidar_resultats <- function(path        = config$results_path,
   if (nrow(models) > 0 && "model_text" %in% names(models)) {
     nou <- vapply(models$model_text, te_model_gretl, logical(1),
                   USE.NAMES = FALSE)
-    res_nou <- "attempt_id" %in% names(resultats) &
-      resultats$attempt_id %in% models$attempt_id[nou]
+    dub <- vapply(models$model_text, practica_dubtosa, character(1),
+                  USE.NAMES = FALSE)
+    te_id   <- "attempt_id" %in% names(resultats)
+    res_nou <- te_id & resultats$attempt_id %in% models$attempt_id[nou]
+    res_dub <- rep("", nrow(resultats))
+    if (te_id) {
+      idx <- match(resultats$attempt_id, models$attempt_id)
+      res_dub <- ifelse(is.na(idx), "", dub[idx])
+    }
     canvia <- !identical(models$model_gretl, nou) ||
-      !identical(resultats$model_gretl, res_nou)
+      !identical(resultats$model_gretl, res_nou) ||
+      !identical(models$dubtosa, dub) ||
+      !identical(resultats$dubtosa, res_dub)
     if (canvia) {
       models$model_gretl    <- nou
+      models$dubtosa        <- dub
       resultats$model_gretl <- res_nou
+      resultats$dubtosa     <- res_dub
       save(resultats, models, file = output_file)
     }
   }

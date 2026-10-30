@@ -39,7 +39,15 @@ RENOMS <- c(MovieScore = "Ratings")   # columnes que es diuen diferent al test
 TOL_COEF  <- 5e-4   # coincidencia relativa amb els coeficients de Gretl
 TOL_RMSE  <- 2e-3   # diferencia relativa per considerar que encaixa
 ABSURD    <- 3      # RMSE entregat per sobre d'aixo x el de predir la mitjana
-MAX_FITS  <- 40000  # regressions provades com a maxim per model
+# Regressions provades com a maxim per model. Les combinacions es proven per
+# ordre de plausibilitat, aixi que la bona surt aviat: amb 40000 es
+# reconstrueixen 135 dels 169 textos del W4 i amb 3000 se'n reconstrueixen
+# 134, amb catorze vegades menys feina. El cost el paguen els models que NO
+# es reconstrueixen, perque esgoten el pressupost sencer.
+MAX_FITS  <- 3000
+
+MAX_NIVELLS  <- 15    # dummies: columnes de text amb mes nivells, s'ignoren
+RECONSTRUEIX <- TRUE  # FALSE: nomes el parseig i les tecniques, en segons
 
 # TRUE: per validar han d'encaixar el RMSE i el MAE. Amb el RMSE sol, dos
 # models diferents es confonen en el 2,4% de les parelles; amb els dos
@@ -52,17 +60,19 @@ EXIGEIX_MAE <- TRUE
 #
 # nivell 2: no s'arriben des dels menus de Gretl, cal escriure-ho
 # nivell 1: son a dos clics, les fa servir molta gent i valen poc com a senyal
+#   d = TRUE: practica dubtosa. No s'ha explicat a classe i no s'espera que
+#   l'entenguin, aixi que trobar-la a una entrega va a dalt de la llista.
 TECNIQUES <- list(
-  list(p = "smear|duan",                              n = "smearing",      t = 2),
+  list(p = "smear|duan",                              n = "smearing",      t = 2, d = TRUE),
   list(p = "\\bsmpl\\b|\\bfcast\\b|\\bscalar\\b|\\bloop\\b|\\bforeach\\b|\\bgenr\\b",
-                                                      n = "script hansl",  t = 2),
-  list(p = "box.?cox",                                n = "Box-Cox",       t = 2),
-  list(p = "newey|\\bHAC\\b",                         n = "HAC",           t = 2),
-  list(p = "\\bwls\\b|cuadrados ponderados",          n = "MCP",           t = 2),
-  list(p = "\\blogit\\b|\\bprobit\\b|\\btobit\\b",    n = "model limitat", t = 2),
-  list(p = "--robust|robustas",                       n = "robustos",      t = 1),
-  list(p = "eliminaci.n secuencial|--auto",           n = "elim. auto",    t = 1),
-  list(p = "white",                                   n = "White",         t = 1)
+                                                      n = "script hansl",  t = 2, d = FALSE),
+  list(p = "box.?cox",                                n = "Box-Cox",       t = 2, d = FALSE),
+  list(p = "newey|\\bHAC\\b",                         n = "HAC",           t = 2, d = FALSE),
+  list(p = "\\bwls\\b|cuadrados ponderados",          n = "MCP",           t = 2, d = FALSE),
+  list(p = "\\blogit\\b|\\bprobit\\b|\\btobit\\b",    n = "model limitat", t = 2, d = FALSE),
+  list(p = "--robust|robustas",                       n = "robustos",      t = 1, d = FALSE),
+  list(p = "eliminaci.n secuencial|--auto",           n = "elim. auto",    t = 1, d = FALSE),
+  list(p = "white",                                   n = "White",         t = 1, d = FALSE)
 )
 
 TZ      <- "Europe/Madrid"
@@ -134,8 +144,33 @@ for (b in VARIABLES) for (tn in names(TRANSF)) {
   COL_TR[[k]] <- suppressWarnings(as.numeric(TRANSF[[tn]](train[[b]])))
   COL_TE[[k]] <- suppressWarnings(as.numeric(TRANSF[[tn]](test[[b]])))
 }
+
+# Dummies de les columnes de text. Els alumnes se les construeixen i les
+# anomenen pel nivell ("Audi", "Manual", "Gasoline"), no per la columna, aixi
+# que s'afegeixen amb el nom del nivell i la resta del codi ja les troba.
+# Sense aixo, cap model del workshop de qualitatives es pot reconstruir.
+CATEG <- names(train)[vapply(train, function(x)
+  is.character(x) || is.factor(x), logical(1))]
+CATEG <- intersect(CATEG, names(test))
+for (b in CATEG) {
+  nivells <- unique(as.character(train[[b]]))
+  nivells <- nivells[!is.na(nivells)]
+  if (length(nivells) > MAX_NIVELLS) next
+  for (lv in nivells) {
+    nom <- gsub("[^A-Za-z0-9_]", "_", lv)
+    if (nom %in% VARIABLES) next
+    k <- paste0(nom, "|x")
+    COL_TR[[k]] <- as.numeric(as.character(train[[b]]) == lv)
+    COL_TE[[k]] <- as.numeric(as.character(test[[b]])  == lv)
+    VARIABLES <- c(VARIABLES, nom)
+  }
+}
 YT <- lapply(RESP_T, function(rt) suppressWarnings(as.numeric(rt$f(train[[RESPOSTA]]))))
 names(YT) <- vapply(RESP_T, function(rt) rt$nom, character(1))
+
+# Quines columnes transformades no tenen cap NA. Permet saltar-se el calcul
+# de la mascara de files a la majoria de combinacions.
+COL_NET <- vapply(COL_TR, function(v) all(is.finite(v)), logical(1))
 
 # RMSE de predir la mitjana del train: la referencia per detectar entregues
 # trencades.
@@ -204,15 +239,17 @@ desllatexa <- function(t) {
 # S'examina el text CRU, abans de convertir res: que hagin enganxat un script
 # en comptes de la finestra del model ja es part del senyal.
 detecta_tecniques <- function(txt) {
-  trobades <- character(0); nivell <- 0L
+  trobades <- character(0); nivell <- 0L; dubtoses <- character(0)
   for (tc in TECNIQUES) {
     if (grepl(tc$p, txt, perl = TRUE, ignore.case = TRUE)) {
       trobades <- c(trobades, tc$n)
       nivell <- max(nivell, tc$t)
+      if (isTRUE(tc$d)) dubtoses <- c(dubtoses, tc$n)
     }
   }
   list(noms = if (length(trobades)) paste(trobades, collapse = ", ") else "",
-       nivell = nivell)
+       nivell = nivell,
+       dubtosa = if (length(dubtoses)) paste(dubtoses, collapse = ", ") else "")
 }
 
 parseja <- function(txt) {
@@ -308,35 +345,47 @@ identifica <- function(p) {
   # transformacio primer) i truncades perque el producte no passi de
   # MAX_FITS. Sense truncar, quatre regressors amb onze variables i nou
   # transformacions donen 96 milions de combinacions.
+  # La graella es una matriu de CLAUS ja fetes, no d'indexs: muntar la clau
+  # amb paste dins del bucle costava mes que la regressio mateixa.
   per <- max(2L, as.integer(floor(MAX_FITS^(1 / length(regs)))))
   opc <- lapply(regs, function(r) {
     bs <- base_cands(r); ts <- transf_cands(r)
     g <- expand.grid(ib = seq_along(bs), it = seq_along(ts))
     g <- g[order(g$ib + g$it, g$ib, g$it), , drop = FALSE]
     g <- head(g, per)
-    cbind(b = bs[g$ib], t = ts[g$it])
+    paste0(bs[g$ib], "|", ts[g$it])
   })
-  graella <- as.matrix(expand.grid(lapply(opc, function(o) seq_len(nrow(o)))))
+  graella <- as.matrix(expand.grid(opc, stringsAsFactors = FALSE))
+  # El terra de 2 a `per` trenca la formula quan hi ha moltes variables:
+  # amb setze regressors surten 2^16 = 65536 combinacions encara que
+  # MAX_FITS sigui 3000. Aqui el limit s'aplica de debo.
+  if (nrow(graella) > MAX_FITS) graella <- graella[seq_len(MAX_FITS), , drop = FALSE]
 
   for (rt in cands) {
-    yt <- YT[[rt$nom]]
+    yt   <- YT[[rt$nom]]
+    ok_y <- is.finite(yt)
+    n_y  <- sum(ok_y)
     for (i in seq_len(nrow(graella))) {
-      claus <- vapply(seq_along(regs), function(j) {
-        o <- opc[[j]][graella[i, j], ]
-        paste0(o[["b"]], "|", o[["t"]])
-      }, character(1))
-      cols <- COL_TR[claus]
-      ok <- is.finite(yt)
-      for (cc in cols) ok <- ok & is.finite(cc)
-      nn <- sum(ok)
+      claus <- graella[i, ]
+      cols  <- COL_TR[claus]
+      # La majoria de columnes no tenen cap NA: quan es aixi, la mascara de
+      # files es la de la resposta i no cal recalcular-la.
+      if (all(COL_NET[claus])) {
+        ok <- ok_y; nn <- n_y
+      } else {
+        ok <- ok_y
+        for (cc in cols) ok <- ok & is.finite(cc)
+        nn <- sum(ok)
+      }
       if (nn < k + 2) next
       if (!is.na(p$nobs) && nn != p$nobs) next
       X <- cbind(1, do.call(cbind, lapply(cols, function(cc) cc[ok])))
-      b <- tryCatch(qr.solve(X, yt[ok]), error = function(e) NULL)
-      if (is.null(b) || length(b) != k) next
+      fit <- tryCatch(.lm.fit(X, yt[ok]), error = function(e) NULL)
+      if (is.null(fit)) next
+      b <- fit$coefficients
+      if (length(b) != k || anyNA(b)) next
       if (!all(abs(b - gc) <= abs(gc) * TOL_COEF + 1e-10)) next
-      e  <- yt[ok] - X %*% b
-      dt <- sqrt(sum(e^2) / (nn - k))
+      dt <- sqrt(sum(fit$residuals^2) / (nn - k))
       if (!is.na(p$dt_reg) && abs(dt - p$dt_reg) > p$dt_reg * TOL_COEF) next
       return(list(rt = rt, claus = claus, coef = as.numeric(b), n = nn))
     }
@@ -378,9 +427,13 @@ say("  amb nombre d'observacions:        ",
 say("  sense cap model a dins:           ",
     sum(vapply(ctrl, function(p) is.null(p) || length(p$coefs) == 0, logical(1))))
 
-say("\nReconstruint models...")
+say("\nReconstruint models (MAX_FITS = ", MAX_FITS, ")...")
+t0 <- Sys.time()
 cache <- new.env(hash = TRUE, parent = emptyenv())
 files <- lapply(seq_len(nrow(models)), function(i) {
+  if (i %% 25 == 0)
+    say("  ", i, "/", nrow(models), "  (",
+        round(as.numeric(difftime(Sys.time(), t0, units = "secs"))), " s)")
   txt <- models$model_text[i]
   # Molts intents comparteixen el mateix text: cada text s'identifica un cop.
   clau <- paste0(nchar(txt), "|", substr(txt, 1, 300))
@@ -388,17 +441,20 @@ files <- lapply(seq_len(nrow(models)), function(i) {
     r <- get(clau, envir = cache)
   } else {
     p   <- tryCatch(parseja(txt), error = function(e) NULL)
-    idf <- if (is.null(p)) NULL else tryCatch(identifica(p), error = function(e) NULL)
-    tc  <- tryCatch(detecta_tecniques(txt), error = function(e) list(noms = "", nivell = 0L))
+    idf <- if (is.null(p) || !RECONSTRUEIX) NULL else
+      tryCatch(identifica(p), error = function(e) NULL)
+    tc  <- tryCatch(detecta_tecniques(txt),
+                    error = function(e) list(noms = "", nivell = 0L, dubtosa = ""))
     r <- if (is.null(idf)) list(esp = NA_character_, rmse = NA_real_, mae = NA_real_)
          else { m <- avalua(idf)
                 list(esp = descriu(idf), rmse = m[["rmse"]], mae = m[["mae"]]) }
-    r$tecniques <- tc$noms; r$nivell <- tc$nivell
+    r$tecniques <- tc$noms; r$nivell <- tc$nivell; r$dubtosa <- tc$dubtosa
     assign(clau, r, envir = cache)
   }
   data.frame(attempt_id = models$attempt_id[i], especificacio = r$esp,
              rmse_model = r$rmse, mae_model = r$mae,
              tecniques = r$tecniques, nivell = r$nivell,
+             dubtosa = r$dubtosa,
              stringsAsFactors = FALSE)
 }) %>% bind_rows()
 
@@ -408,6 +464,9 @@ v <- intents %>%
     desvia  = abs(rmse_model - RMSE) / RMSE,
     desv_mae = abs(mae_model - MAE) / MAE,
     estat = case_when(
+      # Va primer: un intent amb una practica dubtosa no ha de llegir-se mai
+      # com a bo, encara que el RMSE quadri amb el model declarat.
+      nzchar(dubtosa)           ~ "PRACTICA DUBTOSA",
       is.na(rmse_model)         ~ "NO RECONSTRUIBLE",
       RMSE > ABSURD * RMSE_NUL  ~ "ENTREGA TRENCADA",
       desvia <= TOL_RMSE &
@@ -419,6 +478,7 @@ v <- intents %>%
     # Creuament dels dos eixos. Cap d'aquestes combinacions prova res per si
     # sola; el que les fa valer es que coincideixin.
     revisar = case_when(
+      nzchar(dubtosa) ~ paste0("PRACTICA DUBTOSA: ", dubtosa),
       nivell >= 2 & estat == "NO RECONSTRUIBLE" ~
         "tecnica fora de temari i no es una sortida de model",
       nivell >= 2 & estat == "MILLOR QUE EL MODEL" ~
@@ -453,10 +513,14 @@ say("\n", strrep("=", 72))
 say("PER REVISAR, de mes a menys especific")
 say(strrep("=", 72))
 rv <- v %>% filter(nzchar(revisar)) %>%
-  arrange(match(revisar, c("tecnica fora de temari i no es una sortida de model",
-                           "tecnica fora de temari i entrega millor que el model",
-                           "entrega millor que el model declarat",
-                           "tecnica fora de temari")), user, hora)
+  mutate(.ordre = case_when(
+    startsWith(revisar, "PRACTICA DUBTOSA")                          ~ 1L,
+    revisar == "tecnica fora de temari i no es una sortida de model" ~ 2L,
+    revisar == "tecnica fora de temari i entrega millor que el model"~ 3L,
+    revisar == "entrega millor que el model declarat"                ~ 4L,
+    TRUE                                                             ~ 5L
+  )) %>%
+  arrange(.ordre, user, hora) %>% select(-.ordre)
 if (nrow(rv) == 0) say("  cap") else {
   rv %>% transmute(user, hora, revisar, tecniques,
                    entregat = round(RMSE, 1),
@@ -516,7 +580,7 @@ v %>% filter(!is.na(especificacio)) %>% count(especificacio, name = "intents") %
 out <- v %>%
   select(user, hora, any_of(c("attempt_id", "RMSE", "MAE", "has_evidence")),
          especificacio, rmse_model, mae_model, desvia, desv_mae, estat,
-         tecniques, nivell, revisar) %>%
+         tecniques, nivell, dubtosa, revisar) %>%
   arrange(user, hora)
 write.table(out, SORTIDA, sep = "\t", dec = ".", row.names = FALSE,
             quote = FALSE, na = "")
